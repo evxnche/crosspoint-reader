@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""Serve coding-agent usage to the reader's Agent Limits screen.
+"""Push coding-agent usage from CodexBar to the reader's relay.
 
-Reads the history CodexBar (https://github.com/steipete/codexbar) keeps for each
-provider and serves it as the small JSON document the reader fetches.
+The reader is rarely on the same network as this Mac, and never at a stable
+address, so it cannot fetch from here directly. Instead this pushes a snapshot
+to a small always-reachable relay, and the reader fetches that from whatever
+Wi-Fi it happens to be on.
 
-CodexBar already asks each provider for the real figure, so the percentages here
-are usage against the actual plan limit -- not an estimate reconstructed from
-token logs. Nothing is requested from any provider by this script; it only reads
-files CodexBar has already written.
+Numbers come from the history CodexBar (https://github.com/steipete/codexbar)
+keeps per provider. CodexBar has already asked each provider for the real
+figure, so these are percentages of the actual plan limit -- not an estimate
+rebuilt from token logs. Nothing is requested from any provider here; this only
+reads files CodexBar has already written.
 
 Usage:
-    python3 tools/agent-limits-server.py
-    python3 tools/agent-limits-server.py --once
-    python3 tools/agent-limits-server.py --port 8765 --max-age-hours 6
+    python3 tools/agent-limits-push.py --once        # print, do not send
+    python3 tools/agent-limits-push.py --push        # send once
+    python3 tools/agent-limits-push.py --interval 300
 
-Then, on the reader: Settings > System > Agent Limits > Endpoint URL, and enter
-http://<this machine's LAN IP>:8765/limits
+Config lives at ~/Library/Application Support/AgentLimits/config.json:
+    {"url": "https://<project>.vercel.app/api/limits", "token": "<PUSH_TOKEN>"}
 """
 
 import argparse
@@ -24,10 +27,12 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HISTORY_DIR = os.path.expanduser("~/Library/Application Support/com.steipete.codexbar/history")
+CONFIG_PATH = os.path.expanduser("~/Library/Application Support/AgentLimits/config.json")
 
 # Display names, in the order they should appear on the reader. Providers absent
 # from this map still show, under their filename.
@@ -47,8 +52,6 @@ WINDOW_ORDER = {"session": 0, "5h": 0, "weekly": 1, "week": 1, "monthly": 2, "mo
 
 # The reader keeps six rows.
 MAX_ROWS = 6
-# Re-reading every request would re-parse several hundred KB of history.
-CACHE_SECONDS = 30
 
 
 def parse_time(value):
@@ -76,11 +79,8 @@ def humanize(delta_seconds):
 
 
 def latest_entry(window):
-    """Newest sample in a window, by capture time."""
     entries = [e for e in window.get("entries", []) if e.get("capturedAt")]
-    if not entries:
-        return None
-    return max(entries, key=lambda e: e["capturedAt"])
+    return max(entries, key=lambda e: e["capturedAt"]) if entries else None
 
 
 def account_windows(doc):
@@ -101,7 +101,6 @@ def account_windows(doc):
 
 
 def read_provider(path, now, max_age_seconds):
-    """Rows for one provider file, newest sample per window."""
     name = os.path.basename(path)[: -len(".json")]
     label = PROVIDERS.get(name, name.title())
     try:
@@ -127,7 +126,6 @@ def read_provider(path, now, max_age_seconds):
 
         window_name = (window.get("name") or "window").lower()
         resets_at = parse_time(entry.get("resetsAt"))
-        resets = humanize((resets_at - now).total_seconds()) if resets_at else ""
 
         rows.append({
             "sort": (WINDOW_ORDER.get(window_name, 9), name),
@@ -137,7 +135,7 @@ def read_provider(path, now, max_age_seconds):
                 "used": int(round(float(entry.get("usedPercent") or 0))),
                 "total": 100,
                 "unit": "%",
-                "resets": resets,
+                "resets": humanize((resets_at - now).total_seconds()) if resets_at else "",
             },
         })
     return rows
@@ -155,71 +153,72 @@ def build_payload(max_age_seconds):
     if not collected:
         return {"subtitle": "No fresh usage data", "limits": []}
 
-    # Providers in the configured order, shortest window first within each.
     priority = {key: index for index, key in enumerate(PROVIDERS)}
     collected.sort(key=lambda item: (priority.get(item["sort"][1], 99), item["sort"][0]))
 
-    freshest = min(item["age"] for item in collected)
-    subtitle = f"CodexBar · {humanize(freshest)} ago" if freshest > 60 else "CodexBar · live"
-
-    return {"subtitle": subtitle, "limits": [item["row"] for item in collected[:MAX_ROWS]]}
+    # The relay restates the age at fetch time; this is the age at push time.
+    return {"subtitle": "CodexBar", "limits": [item["row"] for item in collected[:MAX_ROWS]]}
 
 
-class LimitsHandler(BaseHTTPRequestHandler):
-    max_age_seconds = 24 * 3600
-    _cache = {"at": 0.0, "body": b""}
+def load_config(args):
+    url, token = args.url, args.token
+    if (not url or not token) and os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH) as handle:
+                cfg = json.load(handle)
+            url = url or cfg.get("url")
+            token = token or cfg.get("token")
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"cannot read {CONFIG_PATH}: {exc}", file=sys.stderr)
+    return url, token
 
-    def do_GET(self):
-        if self.path.split("?")[0] not in ("/", "/limits"):
-            self.send_error(404)
-            return
 
-        now = time.time()
-        if now - self._cache["at"] > CACHE_SECONDS or not self._cache["body"]:
-            payload = build_payload(self.max_age_seconds)
-            LimitsHandler._cache = {"at": now, "body": json.dumps(payload).encode()}
-
-        body = self._cache["body"]
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, fmt, *args):
-        print(f"{self.address_string()} {fmt % args}", file=sys.stderr)
+def push(payload, url, token, timeout=15):
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.status, response.read().decode()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: all interfaces).")
+    parser.add_argument("--url", help="Relay endpoint (default: from config.json).")
+    parser.add_argument("--token", help="Push token (default: from config.json).")
+    parser.add_argument("--interval", type=float, default=0,
+                        help="Seconds between pushes; 0 pushes once and exits.")
     parser.add_argument("--max-age-hours", type=float, default=24,
                         help="Hide a window whose newest sample is older than this.")
-    parser.add_argument("--once", action="store_true", help="Print the JSON and exit, without serving.")
+    parser.add_argument("--once", action="store_true", help="Print the payload without sending it.")
     args = parser.parse_args()
 
     max_age_seconds = args.max_age_hours * 3600
-
-    if not os.path.isdir(HISTORY_DIR):
-        print(f"CodexBar history not found at {HISTORY_DIR}", file=sys.stderr)
-        print("Install and run CodexBar, or point HISTORY_DIR at its history folder.", file=sys.stderr)
-        return 1
 
     if args.once:
         print(json.dumps(build_payload(max_age_seconds), indent=2))
         return 0
 
-    LimitsHandler.max_age_seconds = max_age_seconds
-    server = ThreadingHTTPServer((args.host, args.port), LimitsHandler)
-    print(f"Serving agent limits on http://{args.host}:{args.port}/limits")
-    print(f"Point the reader at http://<this machine's LAN IP>:{args.port}/limits")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    return 0
+    url, token = load_config(args)
+    if not url or not token:
+        print(f"No relay configured. Pass --url/--token, or write {CONFIG_PATH}", file=sys.stderr)
+        return 1
+
+    while True:
+        payload = build_payload(max_age_seconds)
+        try:
+            status, body = push(payload, url, token)
+            print(f"{datetime.now().strftime('%H:%M:%S')} pushed {len(payload['limits'])} rows -> {status} {body}")
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
+            # Offline, asleep, captive portal: keep trying rather than exiting,
+            # so the agent does not need supervision to recover.
+            print(f"{datetime.now().strftime('%H:%M:%S')} push failed: {exc}", file=sys.stderr)
+
+        if args.interval <= 0:
+            return 0
+        time.sleep(args.interval)
 
 
 if __name__ == "__main__":

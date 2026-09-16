@@ -31,3 +31,7 @@ lib/EpdFont/scripts/output/
 /sdkconfig.*
 sdkconfig.sticky
 flake.*
+relay/.vercel
+relay/node_modules
+relay/.env*
+relay/secrets.env

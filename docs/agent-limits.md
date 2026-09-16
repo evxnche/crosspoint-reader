@@ -7,61 +7,81 @@ E-ink holds an image with no power, so the numbers stay readable on a device
 sitting on the desk next to you — which is the point. The reader never
 guesses at them: it fetches from a URL you control.
 
+## How the pieces fit
+
+The reader has no account with any AI provider, and no way to ask one how much
+quota is left. This Mac can, because CodexBar already tracks it. But the two are
+rarely on the same Wi-Fi and the Mac has no fixed address, so the reader cannot
+simply call it.
+
+So the Mac pushes, and the reader pulls, with a small relay in between:
+
+    Mac (anywhere)                       Reader (anywhere)
+       |  POST every 5 min                  |  GET on Refresh
+       v                                    v
+    +-------------------------------------------+
+    |  https://<project>.vercel.app/api/limits  |
+    +-------------------------------------------+
+
+Because both sides reach the relay over the internet, neither needs to know
+where the other is. Work Wi-Fi, a cafe, a phone hotspot — it makes no
+difference, and it keeps working while the Mac is shut in a bag. The reader then
+shows the numbers with their real age, so a stale reading is never mistaken for
+a current one.
+
 ## Setup
 
-### 1. Run the endpoint on your machine
+### 1. Deploy the relay
 
-    python3 tools/agent-limits-server.py
+`relay/` holds a single Vercel function that stores the most recent snapshot and
+hands it back. Deploy it, then set three environment variables on the project:
 
-It prints the port it is listening on (8765 by default).
+| Variable | What it is |
+|---|---|
+| `PUSH_TOKEN` | Secret the Mac sends to write. Generate a long random string. |
+| `READ_KEY` | Secret the reader sends to read. Travels in the URL. |
+| `BLOB_PATH_SECRET` | Random segment in the stored object's path. |
 
-The script reads the per-provider history that
-[CodexBar](https://github.com/steipete/codexbar) keeps in
-`~/Library/Application Support/com.steipete.codexbar/history/`. CodexBar has
-already asked each provider for the real figure, so these are percentages of
-your **actual plan limit** — not an estimate rebuilt from token logs. This
-script only reads files that already exist; it contacts no provider itself, and
-needs CodexBar installed and running.
+`BLOB_PATH_SECRET` exists because the Blob store is public: the SDK version in
+use cannot read a private blob, so an unguessable path is what keeps the raw
+object from being found directly. The endpoint itself is key-gated either way.
 
-Windows whose newest sample is over 24 hours old are hidden, so a provider you
-signed out of months ago does not sit on screen looking live. Change that with
-`--max-age-hours`.
+### 2. Start pushing from the Mac
 
-Check it first without serving:
+    ./tools/install-launchagent.sh https://<project>.vercel.app/api/limits <PUSH_TOKEN>
 
-    python3 tools/agent-limits-server.py --once
+That installs a login agent which pushes every 5 minutes, and keeps running
+across reboots. Check it with:
 
-To have it start at login instead of running it by hand:
+    tail -f /tmp/agentlimits.log
 
-    ./tools/install-launchagent.sh
-
-That copies the script to `~/Library/Application Support/AgentLimits/` before
-registering it. The copy is deliberate: macOS refuses a background agent read
+The script is copied to `~/Library/Application Support/AgentLimits/` before
+being registered. The copy is deliberate: macOS denies a background agent read
 access to `~/Desktop`, `~/Documents` and `~/Downloads`, so a LaunchAgent pointed
 straight at a checkout in one of those folders dies with "Operation not
 permitted". Re-run the installer after changing the script.
 
-    # to remove it again
+    # to stop it again
     launchctl bootout gui/$(id -u)/com.evan.agentlimits
     rm ~/Library/LaunchAgents/com.evan.agentlimits.plist
 
-### 2. Find your machine's LAN address
+To see what would be sent, without sending it:
 
-    ipconfig getifaddr en0      # macOS, Wi-Fi
+    python3 tools/agent-limits-push.py --once
 
 ### 3. Point the reader at it
 
 On the device: **Agent Limits → Endpoint URL**, and enter
 
-    http://192.168.1.42:8765/limits
+    https://<project>.vercel.app/api/limits?k=<READ_KEY>
 
-Then choose **Refresh now**. The reader connects to Wi-Fi, fetches once, saves
-the result, and disconnects.
+Typed once. After that, **Refresh now** is the only control.
 
 ## How refreshing works
 
 Fetching is manual, never automatic. Bringing up the radio costs seconds and
-battery, and a reader should not do that on its own.
+battery, and a reader should not do that on its own. The Mac's pushing is the
+automatic half; the reader only catches up when asked.
 
 The last values are stored on the card, so the screen paints instantly from the
 cache when you open it — with the age of the numbers shown next to them, so you
@@ -98,9 +118,10 @@ the previous values in place rather than blanking the screen.
 
 ## Using a different source
 
-Nothing in the firmware knows about CodexBar. The reader consumes the JSON above
-and nothing else, so pointing it at a different source means replacing this one
-script — or pointing the Endpoint URL at something else entirely.
+Nothing in the firmware knows about CodexBar, Vercel, or any of this. The reader
+fetches a URL and renders the JSON it gets back, so any server returning that
+shape works — swapping the source means replacing the push script, or just
+pointing the Endpoint URL somewhere else.
 
 `total` is always 100 here because CodexBar reports a percentage of the plan
 limit. A source with no notion of a cap can send `total: 0`, and the reader
@@ -108,7 +129,11 @@ shows the bare number instead of a ratio.
 
 ## Security
 
-The endpoint is plain HTTP on your local network and carries your usage figures.
-Do not expose it to the internet — bind it to the LAN, which is what the default
-does behind a home router. HTTPS URLs work too if you put the endpoint behind a
-TLS terminator.
+Both hops are HTTPS, and both are authenticated: `PUSH_TOKEN` to write,
+`READ_KEY` to read. Writes are rejected unless the body parses and contains a
+`limits` array, and are capped at 16KB.
+
+The read key travels in the query string because the reader cannot set request
+headers. Treat that URL as the secret it is — anyone holding it can see your
+usage percentages, though not do anything with them. Rotate by changing
+`READ_KEY` on the Vercel project and re-entering the URL on the device.

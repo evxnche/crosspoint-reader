@@ -1,0 +1,3 @@
+{
+  "functions": { "api/limits.js": { "maxDuration": 10 } }
+}
