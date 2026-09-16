@@ -66,6 +66,7 @@ add_subdirectory(chapter_position)
 add_subdirectory(home_button)
 
 add_subdirectory(inflate_stream)
+add_subdirectory(pdf_extract)
 add_subdirectory(fs_helpers)
 
 add_subdirectory(absolute_grayscale)

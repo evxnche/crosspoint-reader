@@ -9,6 +9,7 @@ class Txt {
   std::string filepath;
   std::string cacheBasePath;
   std::string cachePath;
+  std::string displayTitle;
   bool loaded = false;
   size_t fileSize = 0;
 
@@ -19,6 +20,9 @@ class Txt {
   [[nodiscard]] const std::string& getPath() const { return filepath; }
   [[nodiscard]] const std::string& getCachePath() const { return cachePath; }
   [[nodiscard]] std::string getTitle() const;
+  // Show this instead of the filename. Used when the plain text is a cached
+  // rendering of another document, whose own title is the one worth showing.
+  void setDisplayTitle(std::string title) { displayTitle = std::move(title); }
   [[nodiscard]] size_t getFileSize() const { return fileSize; }
 
   void setupCacheDir() const;

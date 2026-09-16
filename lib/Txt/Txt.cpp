@@ -36,6 +36,8 @@ bool Txt::load() {
 }
 
 std::string Txt::getTitle() const {
+  if (!displayTitle.empty()) return displayTitle;
+
   // Extract filename without path and extension
   size_t lastSlash = filepath.find_last_of('/');
   std::string filename = (lastSlash != std::string::npos) ? filepath.substr(lastSlash + 1) : filepath;

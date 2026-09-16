@@ -9,9 +9,12 @@
 #include "CrossPointSettings.h"
 #include "ReaderActivity.h"
 
-class TxtReaderActivity final : public ReaderActivity {
+class TxtReaderActivity : public ReaderActivity {
+ protected:
+  // The PDF reader supplies its own Txt, built over the extracted text cache.
   std::unique_ptr<Txt> txt;
 
+ private:
   int currentPage = 0;
   int totalPages = 1;
 
@@ -42,9 +45,17 @@ class TxtReaderActivity final : public ReaderActivity {
   void loadProgress();
   void renderStatusBar() const;
 
+  void renderBook() override;
+
+ protected:
   bool loadBook() override;
   std::string getBookTitle() const override { return txt ? txt->getTitle() : ""; }
-  void renderBook() override;
+
+  // Subclasses that read plain text produced from another format name
+  // themselves and build `txt` over their own cache in loadBook().
+  TxtReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                    bool allowFastInitialRefresh)
+      : ReaderActivity(name, renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
 
  public:
   explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,

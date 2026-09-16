@@ -3,6 +3,7 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <Logging.h>
+#include <Pdf.h>
 #include <Txt.h>
 #include <Xtc.h>
 
@@ -14,10 +15,12 @@ bool isBookCacheDirectoryName(const char* name) {
   constexpr char EPUB_PREFIX[] = "epub_";
   constexpr char TXT_PREFIX[] = "txt_";
   constexpr char XTC_PREFIX[] = "xtc_";
+  constexpr char PDF_PREFIX[] = "pdf_";
 
   return strncmp(name, EPUB_PREFIX, std::size(EPUB_PREFIX) - 1) == 0 ||
          strncmp(name, TXT_PREFIX, std::size(TXT_PREFIX) - 1) == 0 ||
-         strncmp(name, XTC_PREFIX, std::size(XTC_PREFIX) - 1) == 0;
+         strncmp(name, XTC_PREFIX, std::size(XTC_PREFIX) - 1) == 0 ||
+         strncmp(name, PDF_PREFIX, std::size(PDF_PREFIX) - 1) == 0;
 }
 
 void clearBookCache(const std::string& path) {
@@ -27,6 +30,9 @@ void clearBookCache(const std::string& path) {
     Xtc(path, "/.crosspoint").clearCache();
   } else if (FsHelpers::hasTxtExtension(path)) {
     Txt(path, "/.crosspoint").clearCache();
+  } else if (FsHelpers::hasPdfExtension(path)) {
+    // Drops the extracted text too, so the next open re-parses the document.
+    Pdf(path, "/.crosspoint").clearCache();
   } else {
     return;
   }

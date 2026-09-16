@@ -176,7 +176,8 @@ bool installNewIndex() {
 
 bool isBookName(const std::string& name) {
   return FsHelpers::checkFileExtension(name, ".epub") || FsHelpers::checkFileExtension(name, ".txt") ||
-         FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc");
+         FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc") ||
+         FsHelpers::checkFileExtension(name, ".pdf");
 }
 
 // macOS AppleDouble sidecars and hidden entries. The file browser already hides
