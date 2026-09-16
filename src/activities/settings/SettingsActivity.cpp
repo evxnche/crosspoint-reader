@@ -30,6 +30,7 @@
 #include "SettingsList.h"
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
+#include "activities/agent/AgentLimitsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
@@ -108,6 +109,7 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_AGENT_LIMITS, SettingAction::AgentLimits));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_ABOUT, SettingAction::About));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   readerSettings.insert(readerSettings.begin(),
@@ -417,6 +419,9 @@ void SettingsActivity::toggleCurrentSetting() {
         } else {
           LOG_ERR("SETTINGS", "OOM: KeyboardLayoutsActivity");
         }
+        break;
+      case SettingAction::AgentLimits:
+        startActivityForResult(std::make_unique<AgentLimitsActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::About:
         if (auto activity = makeUniqueNoThrow<AboutActivity>(renderer, mappedInput)) {
