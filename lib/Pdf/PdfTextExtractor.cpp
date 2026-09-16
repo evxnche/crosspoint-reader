@@ -573,6 +573,15 @@ bool PdfTextExtractor::run(PdfDocument& doc, const std::string& outPath, const O
     flushLine();
     if (!pageProducedText) ++emptyPageCount;
 
+#ifdef ARDUINO
+    // Extraction is the most allocation-hungry thing the reader does. Logging
+    // the heap per page is what turns "it stopped" into a diagnosable point.
+    if (i % 10 == 0) {
+      LOG_DBG(TAG, "page %u/%u chars=%u heap=%u", static_cast<unsigned>(i), static_cast<unsigned>(total),
+              static_cast<unsigned>(charCount), static_cast<unsigned>(ESP.getFreeHeap()));
+    }
+#endif
+
     // Keep the watchdog fed and let the UI task render progress.
     vTaskDelay(1);
   }

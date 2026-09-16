@@ -76,7 +76,31 @@ bool AgentLimitsStore::fromJson(JsonVariantConst doc) {
   url = clipped(doc["url"] | "", MAX_URL_LENGTH);
   updatedAt = doc["updatedAt"] | 0u;
   subtitle = clipped(doc["subtitle"] | "", MAX_NAME_LENGTH);
-  parseProviders(doc["providers"], providers);
+
+  if (!parseProviders(doc["providers"], providers)) {
+    // A cache written before the grouped layout holds a flat "limits" array.
+    // Keeping the numbers on screen matters more than their grouping, and the
+    // next refresh replaces them anyway.
+    JsonArrayConst legacy = doc["limits"];
+    if (!legacy.isNull()) {
+      providers.clear();
+      providers.reserve(1);
+      AgentProvider provider;
+      provider.name = subtitle.empty() ? "Agents" : subtitle;
+      provider.status = "";
+      for (JsonVariantConst item : legacy) {
+        if (provider.windows.size() >= MAX_WINDOWS) break;
+        AgentWindow window;
+        window.label = clipped(item["name"] | "", MAX_FIELD_LENGTH);
+        if (window.label.empty()) continue;
+        window.usedPercent = std::clamp<int>(item["used"] | 0, 0, 100);
+        window.resets = clipped(item["resets"] | "", MAX_FIELD_LENGTH);
+        provider.windows.push_back(std::move(window));
+      }
+      if (!provider.windows.empty()) providers.push_back(std::move(provider));
+      requestResave();
+    }
+  }
   return true;
 }
 

@@ -32,6 +32,8 @@ constexpr int HEADER_BLOCK_HEIGHT = 34;
 constexpr int WINDOW_BLOCK_HEIGHT = 44;
 constexpr int STATUS_BLOCK_HEIGHT = 26;
 constexpr int SIDE_PADDING = 18;
+constexpr int CONTROL_HEIGHT = 40;
+constexpr int CONTROL_GAP = 10;
 
 // At or above this the bar fills edge to edge instead of inset, so a window
 // near its cap reads as alarming from across the desk.
@@ -93,8 +95,16 @@ int AgentLimitsActivity::bodyTop() const {
 }
 
 int AgentLimitsActivity::bodyHeight() const {
+  return controlsTop() - bodyTop() - CONTROL_GAP;
+}
+
+// Top of the on-screen control row, or where the button-hint band begins on a
+// device without touch.
+int AgentLimitsActivity::controlsTop() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  return renderer.getScreenHeight() - bodyTop() - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  const int bottom = renderer.getScreenHeight() - metrics.verticalSpacing -
+                     (mappedInput.hasTouch() ? 0 : metrics.buttonHintsHeight);
+  return bottom - (mappedInput.hasTouch() ? CONTROL_HEIGHT : 0);
 }
 
 void AgentLimitsActivity::rebuildBlocks() {
@@ -185,6 +195,33 @@ void AgentLimitsActivity::paginate() {
   currentPage = std::clamp(currentPage, 0, std::max(0, pages - 1));
 }
 
+bool AgentLimitsActivity::usesOnScreenControls() const { return mappedInput.hasTouch(); }
+
+Rect AgentLimitsActivity::refreshRect() const {
+  const int width = renderer.getScreenWidth();
+  const int usable = width - SIDE_PADDING * 2 - CONTROL_GAP;
+  return Rect{SIDE_PADDING, controlsTop(), usable / 2, CONTROL_HEIGHT};
+}
+
+Rect AgentLimitsActivity::endpointRect() const {
+  const Rect left = refreshRect();
+  return Rect{left.x + left.width + CONTROL_GAP, left.y, left.width, CONTROL_HEIGHT};
+}
+
+void AgentLimitsActivity::drawControls() const {
+  if (!usesOnScreenControls()) return;
+
+  const auto draw = [this](const Rect& rect, const char* label) {
+    renderer.drawRect(rect.x, rect.y, rect.width, rect.height, true);
+    const int w = renderer.getTextWidth(UI_10_FONT_ID, label);
+    const int baseline = rect.y + (rect.height + renderer.getLineHeight(UI_10_FONT_ID)) / 2 - 2;
+    renderer.drawText(UI_10_FONT_ID, rect.x + (rect.width - w) / 2, baseline, label);
+  };
+
+  draw(refreshRect(), I18N.get(refreshing ? StrId::STR_AGENT_LIMITS_FETCHING : StrId::STR_AGENT_LIMITS_REFRESH));
+  draw(endpointRect(), I18N.get(StrId::STR_AGENT_LIMITS_ENDPOINT));
+}
+
 void AgentLimitsActivity::drawBar(const int x, const int y, const int width, const int percent) const {
   const int filled = std::clamp(width * percent / 100, 0, width);
 
@@ -271,10 +308,10 @@ void AgentLimitsActivity::render(RenderLock&&) {
     char buf[24];
     snprintf(buf, sizeof(buf), "%d / %d", currentPage + 1, pages);
     const int w = renderer.getTextWidth(SMALL_FONT_ID, buf);
-    renderer.drawText(SMALL_FONT_ID, (pageWidth - w) / 2, renderer.getScreenHeight() - metrics.buttonHintsHeight - 4,
-                      buf);
+    renderer.drawText(SMALL_FONT_ID, (pageWidth - w) / 2, controlsTop() - 4, buf);
   }
 
+  drawControls();
   GUI.drawButtonHints(renderer, I18N.get(StrId::STR_BACK), I18N.get(StrId::STR_AGENT_LIMITS_REFRESH),
                       I18N.get(StrId::STR_AGENT_LIMITS_ENDPOINT), nullptr);
 }
@@ -301,6 +338,19 @@ void AgentLimitsActivity::loop() {
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
+    if (usesOnScreenControls()) {
+      const auto hits = [](const Rect& r, const int x, const int y) {
+        return x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
+      };
+      if (hits(refreshRect(), tx, ty)) {
+        startRefresh();
+        return;
+      }
+      if (hits(endpointRect(), tx, ty)) {
+        editEndpoint();
+        return;
+      }
+    }
     if (tx < renderer.getScreenWidth() / 3) {
       if (currentPage > 0) {
         --currentPage;

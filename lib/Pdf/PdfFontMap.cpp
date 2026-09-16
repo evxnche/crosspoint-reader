@@ -15,8 +15,11 @@ namespace {
 constexpr const char* TAG = "PDFFNT";
 
 // A ToUnicode CMap for a large CJK font can list tens of thousands of codes.
-// Past this the map costs more RAM than the page it would decode is worth.
-constexpr size_t MAX_MAPPINGS = 24000;
+// Each mapping costs 10 bytes of index plus its UTF-8 bytes, so 24,000 of them
+// is ~300KB -- the entire DRAM heap on a C3, and more than the X4 Pro can spare
+// with the reader and framebuffer up. 4,000 covers every Latin font and the
+// common subset of a CJK one; past that the page is not worth the crash.
+constexpr size_t MAX_MAPPINGS = 4000;
 
 void appendCodepoint(const uint32_t cp, std::string& out) {
   if (cp == 0) return;

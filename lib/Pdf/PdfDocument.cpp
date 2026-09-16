@@ -17,7 +17,10 @@ constexpr const char* TAG = "PDFDOC";
 // Guard rails against corrupt or hostile files. Each is a hard structural
 // limit, not a tuning knob: exceeding one means the document cannot be read on
 // this hardware regardless.
-constexpr size_t MAX_OBJECTS = 262144;
+// 12 bytes per entry, so this cap is also a memory ceiling: 32,768 objects is
+// ~390KB, already past what the reader can spare. It exists to stop a corrupt
+// file allocating without bound, not as a size a real document should reach.
+constexpr size_t MAX_OBJECTS = 32768;
 constexpr int MAX_PAGES = 4096;
 constexpr int MAX_XREF_CHAIN = 32;
 constexpr int MAX_TREE_DEPTH = 64;

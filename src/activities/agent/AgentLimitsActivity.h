@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "components/themes/BaseTheme.h"  // Rect
 #include "util/ButtonNavigator.h"
 
 // Shows how much of each coding-agent usage window is spent.
@@ -42,6 +43,14 @@ class AgentLimitsActivity final : public Activity {
   void paginate();
   int bodyTop() const;
   int bodyHeight() const;
+  // Touch devices get on-screen controls: drawButtonHints() draws nothing when
+  // the panel has touch, so physical-button hints alone leave Refresh and
+  // Endpoint with no visible or reachable trigger.
+  bool usesOnScreenControls() const;
+  int controlsTop() const;
+  Rect refreshRect() const;
+  Rect endpointRect() const;
+  void drawControls() const;
   void drawBlock(const Block& block, int x, int y, int width) const;
   void drawBar(int x, int y, int width, int percent) const;
 
