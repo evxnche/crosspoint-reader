@@ -50,8 +50,12 @@ PROVIDERS = {
 # Shorter windows first: the one about to run out is the one worth seeing.
 WINDOW_ORDER = {"session": 0, "5h": 0, "weekly": 1, "week": 1, "monthly": 2, "month": 2}
 
-# The reader keeps six rows.
-MAX_ROWS = 6
+# CodexBar's internal window names, as the reader should label them.
+WINDOW_LABELS = {"session": "5-hr", "5h": "5-hr", "weekly": "Weekly", "monthly": "Monthly"}
+
+# Matches AgentLimitsStore's caps.
+MAX_PROVIDERS = 12
+MAX_WINDOWS = 4
 
 
 def parse_time(value):
@@ -101,6 +105,12 @@ def account_windows(doc):
 
 
 def read_provider(path, now, max_age_seconds):
+    """One provider card: its windows, plus how fresh the reading is.
+
+    Providers with no account and providers last seen weeks ago are still
+    returned, carrying a status instead of windows. Dropping them silently is
+    what makes the screen look like it is missing providers.
+    """
     name = os.path.basename(path)[: -len(".json")]
     label = PROVIDERS.get(name, name.title())
     try:
@@ -108,9 +118,11 @@ def read_provider(path, now, max_age_seconds):
             doc = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"skipping {name}: {exc}", file=sys.stderr)
-        return []
+        return {"name": label, "status": "unreadable", "windows": [], "age": None}
 
-    rows = []
+    windows = []
+    freshest = None
+    stalest_seen = None
     for window in account_windows(doc):
         entry = latest_entry(window)
         if not entry:
@@ -119,45 +131,58 @@ def read_provider(path, now, max_age_seconds):
         if not captured:
             continue
         age = (now - captured).total_seconds()
-        # A provider signed out months ago should not sit on the screen looking
-        # like a live reading.
-        if age > max_age_seconds:
-            continue
+        stalest_seen = age if stalest_seen is None else min(stalest_seen, age)
 
         window_name = (window.get("name") or "window").lower()
         resets_at = parse_time(entry.get("resetsAt"))
-
-        rows.append({
-            "sort": (WINDOW_ORDER.get(window_name, 9), name),
-            "age": age,
-            "row": {
-                "name": f"{label} {window_name}",
-                "used": int(round(float(entry.get("usedPercent") or 0))),
-                "total": 100,
-                "unit": "%",
-                "resets": humanize((resets_at - now).total_seconds()) if resets_at else "",
-            },
+        windows.append({
+            "sort": WINDOW_ORDER.get(window_name, 9),
+            "stale": age > max_age_seconds,
+            "label": WINDOW_LABELS.get(window_name, window_name.title()),
+            "used": int(round(float(entry.get("usedPercent") or 0))),
+            "resets": humanize((resets_at - now).total_seconds()) if resets_at else "",
         })
-    return rows
+        if freshest is None or age < freshest:
+            freshest = age
+
+    if not windows:
+        return {"name": label, "status": "not connected", "windows": [], "age": None}
+
+    # Percentages captured weeks ago are not a reading, they are a memory. Keep
+    # the provider visible, but say so rather than dressing it up as current.
+    if all(w["stale"] for w in windows):
+        return {"name": label, "status": f"{humanize(stalest_seen)} old", "windows": [], "age": freshest}
+
+    windows.sort(key=lambda w: w["sort"])
+    return {
+        "name": label,
+        "status": "live" if freshest is not None and freshest <= 300 else f"{humanize(freshest)} old",
+        "windows": [{k: w[k] for k in ("label", "used", "resets")} for w in windows[:MAX_WINDOWS]],
+        "age": freshest,
+    }
 
 
 def build_payload(max_age_seconds):
     now = datetime.now(timezone.utc)
     if not os.path.isdir(HISTORY_DIR):
-        return {"subtitle": "CodexBar not found", "limits": []}
+        return {"subtitle": "CodexBar not found", "providers": []}
 
-    collected = []
+    cards = []
     for path in sorted(glob.glob(os.path.join(HISTORY_DIR, "*.json"))):
-        collected += read_provider(path, now, max_age_seconds)
+        cards.append(read_provider(path, now, max_age_seconds))
 
-    if not collected:
-        return {"subtitle": "No fresh usage data", "limits": []}
+    # Configured order first, then anything unrecognised; within that, providers
+    # that actually have readings come before the ones that do not.
+    priority = {PROVIDERS[key]: index for index, key in enumerate(PROVIDERS)}
+    cards.sort(key=lambda c: (0 if c["windows"] else 1, priority.get(c["name"], 99)))
 
-    priority = {key: index for index, key in enumerate(PROVIDERS)}
-    collected.sort(key=lambda item: (priority.get(item["sort"][1], 99), item["sort"][0]))
+    live = [c["age"] for c in cards if c["age"] is not None]
+    subtitle = "CodexBar" if not live else (
+        "CodexBar" if min(live) <= 300 else f"CodexBar · {humanize(min(live))} old")
 
-    # The relay restates the age at fetch time; this is the age at push time.
-    return {"subtitle": "CodexBar", "limits": [item["row"] for item in collected[:MAX_ROWS]]}
+    for card in cards:
+        card.pop("age", None)
+    return {"subtitle": subtitle, "providers": cards[:MAX_PROVIDERS]}
 
 
 def load_config(args):
@@ -210,7 +235,7 @@ def main():
         payload = build_payload(max_age_seconds)
         try:
             status, body = push(payload, url, token)
-            print(f"{datetime.now().strftime('%H:%M:%S')} pushed {len(payload['limits'])} rows -> {status} {body}")
+            print(f"{datetime.now().strftime('%H:%M:%S')} pushed {len(payload['providers'])} providers -> {status} {body}")
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
             # Offline, asleep, captive portal: keep trying rather than exiting,
             # so the agent does not need supervision to recover.

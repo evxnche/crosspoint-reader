@@ -3,42 +3,60 @@
 #include <string>
 #include <vector>
 
-#include "activities/UiListActivity.h"
+#include "activities/Activity.h"
+#include "util/ButtonNavigator.h"
 
 // Shows how much of each coding-agent usage window is spent.
 //
-// The values come from a URL the user points at their own machine or a small
-// endpoint they host; this screen only fetches and displays them. It paints
-// from the cached values first and fetches only when asked, so opening it is
-// instant and the radio stays off unless the user wants fresh numbers.
-class AgentLimitsActivity final : public UiListActivity {
+// Laid out as one card per provider -- a name, then a bar per window -- because
+// the point of the screen is a glance, and a flat list of "Claude session 60%"
+// rows makes the eye do the grouping the layout should have done.
+//
+// Paged rather than scrolled: an e-ink panel redraws too slowly for smooth
+// scrolling, and a page flip is one refresh.
+class AgentLimitsActivity final : public Activity {
  public:
-  AgentLimitsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
+  AgentLimitsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : Activity("AgentLimits", renderer, mappedInput) {}
 
   void onEnter() override;
   void onExit() override;
+  void loop() override;
+  void render(RenderLock&&) override;
+  bool preventAutoSleep() override { return refreshing; }
 
  private:
-  int listCount() const override { return static_cast<int>(rowItems_.size()); }
-  void buildScreen(UiScreen& screen) override;
-  void activateIndex(int index) override;
-  const char* headerTitle() const override;
+  // One drawable unit. Cards are split into blocks so a provider can break
+  // across a page boundary without a window's label parting from its bar.
+  struct Block {
+    enum class Kind : uint8_t { ProviderHeader, Window, Status, Message };
+    Kind kind = Kind::Message;
+    int height = 0;
+    int providerIndex = -1;
+    int windowIndex = -1;
+    std::string text;       // header/status/message text
+    std::string rightText;  // right-aligned companion (status, reset time)
+  };
 
-  void rebuildRows();
+  void rebuildBlocks();
+  void paginate();
+  int bodyTop() const;
+  int bodyHeight() const;
+  void drawBlock(const Block& block, int x, int y, int width) const;
+  void drawBar(int x, int y, int width, int percent) const;
+
   void startRefresh();
   void onWifiReady(bool connected);
   void editEndpoint();
 
-  // Index of the two trailing action rows, or -1 when they are not shown.
-  int refreshRowIndex = -1;
-  int endpointRowIndex = -1;
+  std::vector<Block> blocks;
+  // Index of the first block on each page, plus a trailing end sentinel.
+  std::vector<int> pageStarts;
+  int currentPage = 0;
 
   bool wifiStarted = false;
-  // Set while a fetch is in flight so the row reads as busy rather than stale.
   bool refreshing = false;
   std::string statusText;
 
-  std::vector<std::string> rowLabels_;
-  std::vector<std::string> rowValues_;
-  std::vector<freeink::ui::ListItem> rowItems_;
+  ButtonNavigator buttonNavigator;
 };

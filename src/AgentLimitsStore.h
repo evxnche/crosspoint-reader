@@ -5,24 +5,31 @@
 #include <string>
 #include <vector>
 
-// One usage meter, as reported by the endpoint.
-struct AgentLimit {
-  std::string name;    // "Claude Code 5h", "Weekly", ...
-  int used = 0;        // consumed so far, in `unit`
-  int total = 0;       // the cap; 0 means "no cap, just show `used`"
-  std::string unit;    // "%", "req", "tok" — shown after the numbers
-  std::string resets;  // free text, e.g. "3h 12m" or "Mon 09:00"
+// One usage window within a provider, e.g. Claude's rolling 5 hours.
+struct AgentWindow {
+  std::string label;    // "5-hr", "Weekly"
+  int usedPercent = 0;  // 0-100
+  std::string resets;   // free text, e.g. "2h 36m"
 };
 
-// Endpoint URL plus the last values fetched from it.
+// One provider and every window it reports.
+struct AgentProvider {
+  std::string name;    // "Claude", "Codex"
+  std::string status;  // "live", "3h old", "not connected"
+  std::vector<AgentWindow> windows;
+};
+
+// Endpoint URL plus the last snapshot fetched from it.
 //
-// The values are persisted so the screen paints instantly from the card and
-// the sleep screen can show them with the radio off. Fetching is explicit:
-// bringing up WiFi costs seconds and battery, and a reader should not do that
-// on its own.
+// The snapshot is persisted so the screen paints instantly from the card and
+// shows how old the numbers are. Fetching is explicit: bringing up WiFi costs
+// seconds and battery, and a reader should not do that on its own.
 class AgentLimitsStore : public PersistableStore<AgentLimitsStore> {
  public:
-  static constexpr size_t MAX_LIMITS = 6;
+  // Providers with nothing to report are still listed, so a signed-out one
+  // reads as signed out rather than silently vanishing.
+  static constexpr size_t MAX_PROVIDERS = 12;
+  static constexpr size_t MAX_WINDOWS = 4;
   static constexpr size_t MAX_URL_LENGTH = 200;
 
   static const char* getFilePath() { return "/.crosspoint/agent_limits.json"; }
@@ -32,13 +39,13 @@ class AgentLimitsStore : public PersistableStore<AgentLimitsStore> {
   [[nodiscard]] const std::string& getUrl() const { return url; }
   void setUrl(std::string value);
 
-  [[nodiscard]] const std::vector<AgentLimit>& getLimits() const { return limits; }
+  [[nodiscard]] const std::vector<AgentProvider>& getProviders() const { return providers; }
   // Epoch seconds of the last successful fetch; 0 when never fetched.
   [[nodiscard]] uint32_t getUpdatedAt() const { return updatedAt; }
-  // Free-text status line from the endpoint, e.g. a plan name.
+  // Free-text status line from the endpoint, e.g. "CodexBar · live".
   [[nodiscard]] const std::string& getSubtitle() const { return subtitle; }
 
-  // Replace the cached values from an endpoint response body. Returns false
+  // Replace the cached snapshot from an endpoint response body. Returns false
   // when the body is not the expected shape; the previous values are kept.
   bool applyResponse(const std::string& body, uint32_t fetchedAt);
 
@@ -46,9 +53,13 @@ class AgentLimitsStore : public PersistableStore<AgentLimitsStore> {
   AgentLimitsStore() = default;
   friend class PersistableStore<AgentLimitsStore>;
 
+  // Shared by fromJson (disk) and applyResponse (network): the two carry the
+  // same shape, so the parse lives in one place.
+  static bool parseProviders(JsonArrayConst array, std::vector<AgentProvider>& out);
+
   std::string url;
   std::string subtitle;
-  std::vector<AgentLimit> limits;
+  std::vector<AgentProvider> providers;
   uint32_t updatedAt = 0;
 };
 

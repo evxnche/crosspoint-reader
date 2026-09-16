@@ -2,6 +2,8 @@
 
 #include <Logging.h>
 
+#include <algorithm>
+
 namespace {
 constexpr const char* TAG = "AGENTLIM";
 constexpr size_t MAX_NAME_LENGTH = 40;
@@ -20,19 +22,53 @@ void AgentLimitsStore::setUrl(std::string value) {
   url = std::move(value);
 }
 
+bool AgentLimitsStore::parseProviders(JsonArrayConst array, std::vector<AgentProvider>& out) {
+  out.clear();
+  if (array.isNull()) return false;
+
+  out.reserve(std::min(array.size(), MAX_PROVIDERS));
+  for (JsonVariantConst item : array) {
+    if (out.size() >= MAX_PROVIDERS) break;
+    AgentProvider provider;
+    provider.name = clipped(item["name"] | "", MAX_NAME_LENGTH);
+    if (provider.name.empty()) continue;
+    provider.status = clipped(item["status"] | "", MAX_FIELD_LENGTH);
+
+    JsonArrayConst windows = item["windows"];
+    if (!windows.isNull()) {
+      provider.windows.reserve(std::min(windows.size(), MAX_WINDOWS));
+      for (JsonVariantConst w : windows) {
+        if (provider.windows.size() >= MAX_WINDOWS) break;
+        AgentWindow window;
+        window.label = clipped(w["label"] | "", MAX_FIELD_LENGTH);
+        if (window.label.empty()) continue;
+        window.usedPercent = std::clamp<int>(w["used"] | 0, 0, 100);
+        window.resets = clipped(w["resets"] | "", MAX_FIELD_LENGTH);
+        provider.windows.push_back(std::move(window));
+      }
+    }
+    out.push_back(std::move(provider));
+  }
+  return !out.empty();
+}
+
 void AgentLimitsStore::toJson(JsonDocument& doc) const {
   doc["url"] = url;
   doc["updatedAt"] = updatedAt;
   doc["subtitle"] = subtitle;
 
-  const JsonArray arr = doc["limits"].to<JsonArray>();
-  for (const auto& limit : limits) {
+  const JsonArray arr = doc["providers"].to<JsonArray>();
+  for (const auto& provider : providers) {
     const JsonObject o = arr.add<JsonObject>();
-    o["name"] = limit.name;
-    o["used"] = limit.used;
-    o["total"] = limit.total;
-    o["unit"] = limit.unit;
-    o["resets"] = limit.resets;
+    o["name"] = provider.name;
+    o["status"] = provider.status;
+    const JsonArray windows = o["windows"].to<JsonArray>();
+    for (const auto& window : provider.windows) {
+      const JsonObject w = windows.add<JsonObject>();
+      w["label"] = window.label;
+      w["used"] = window.usedPercent;
+      w["resets"] = window.resets;
+    }
   }
 }
 
@@ -40,28 +76,11 @@ bool AgentLimitsStore::fromJson(JsonVariantConst doc) {
   url = clipped(doc["url"] | "", MAX_URL_LENGTH);
   updatedAt = doc["updatedAt"] | 0u;
   subtitle = clipped(doc["subtitle"] | "", MAX_NAME_LENGTH);
-
-  limits.clear();
-  JsonArrayConst arr = doc["limits"];
-  if (arr.isNull()) return true;
-
-  limits.reserve(std::min<size_t>(arr.size(), MAX_LIMITS));
-  for (JsonVariantConst item : arr) {
-    if (limits.size() >= MAX_LIMITS) break;
-    AgentLimit limit;
-    limit.name = clipped(item["name"] | "", MAX_NAME_LENGTH);
-    limit.used = item["used"] | 0;
-    limit.total = item["total"] | 0;
-    limit.unit = clipped(item["unit"] | "", MAX_FIELD_LENGTH);
-    limit.resets = clipped(item["resets"] | "", MAX_FIELD_LENGTH);
-    if (!limit.name.empty()) limits.push_back(std::move(limit));
-  }
+  parseProviders(doc["providers"], providers);
   return true;
 }
 
 bool AgentLimitsStore::applyResponse(const std::string& body, const uint32_t fetchedAt) {
-  // Sized for MAX_LIMITS entries with the field caps above, plus slack for the
-  // whitespace and key names a hand-written endpoint is likely to emit.
   JsonDocument doc;
   const DeserializationError err = deserializeJson(doc, body);
   if (err) {
@@ -69,32 +88,13 @@ bool AgentLimitsStore::applyResponse(const std::string& body, const uint32_t fet
     return false;
   }
 
-  JsonArrayConst arr = doc["limits"];
-  if (arr.isNull()) {
-    LOG_ERR(TAG, "Response has no 'limits' array");
+  std::vector<AgentProvider> parsed;
+  if (!parseProviders(doc["providers"], parsed)) {
+    LOG_ERR(TAG, "Response listed no usable providers");
     return false;
   }
 
-  std::vector<AgentLimit> parsed;
-  parsed.reserve(std::min<size_t>(arr.size(), MAX_LIMITS));
-  for (JsonVariantConst item : arr) {
-    if (parsed.size() >= MAX_LIMITS) break;
-    AgentLimit limit;
-    limit.name = clipped(item["name"] | "", MAX_NAME_LENGTH);
-    if (limit.name.empty()) continue;
-    limit.used = item["used"] | 0;
-    limit.total = item["total"] | 0;
-    limit.unit = clipped(item["unit"] | "", MAX_FIELD_LENGTH);
-    limit.resets = clipped(item["resets"] | "", MAX_FIELD_LENGTH);
-    parsed.push_back(std::move(limit));
-  }
-
-  if (parsed.empty()) {
-    LOG_ERR(TAG, "Response listed no usable limits");
-    return false;
-  }
-
-  limits = std::move(parsed);
+  providers = std::move(parsed);
   subtitle = clipped(doc["subtitle"] | "", MAX_NAME_LENGTH);
   updatedAt = fetchedAt;
   return true;

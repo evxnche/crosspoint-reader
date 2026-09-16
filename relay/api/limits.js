@@ -53,7 +53,7 @@ export default async function handler(req, res) {
     } catch {
       return res.status(400).json({ error: 'invalid json' });
     }
-    if (!Array.isArray(parsed.limits)) return res.status(400).json({ error: 'missing limits array' });
+    if (!Array.isArray(parsed.providers)) return res.status(400).json({ error: 'missing providers array' });
 
     // pushedAt lets the reader show how stale the numbers are even when the
     // Mac has been asleep for a day.
@@ -78,10 +78,14 @@ export default async function handler(req, res) {
     try {
       meta = await head(BLOB_PATH);
     } catch {
-      return res.status(200).json({ subtitle: 'No data pushed yet', limits: [] });
+      return res.status(200).json({ subtitle: 'No data pushed yet', providers: [] });
     }
 
-    const upstream = await fetch(meta.url, { cache: 'no-store' });
+    // The blob's public URL sits behind a CDN, and no-store alone does not
+    // defeat it. uploadedAt changes on every push, so it doubles as the
+    // cache-busting key and a stale read cannot outlive a write.
+    const bust = Date.parse(meta.uploadedAt || '') || Date.now();
+    const upstream = await fetch(`${meta.url}?v=${bust}`, { cache: 'no-store' });
     if (!upstream.ok) return res.status(502).json({ error: 'store unavailable' });
 
     const snapshot = await upstream.json();

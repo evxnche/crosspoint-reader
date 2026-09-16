@@ -1,11 +1,13 @@
 #include "AgentLimitsActivity.h"
 
+#include <Arduino.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <WiFi.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <variant>
 
@@ -15,33 +17,43 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 #include "network/HttpDownloader.h"
-
-namespace fui = freeink::ui;
 
 namespace {
 constexpr const char* TAG = "AGENTUI";
 
-// "42/100% - 3h 12m", or "42% - 3h 12m" when the endpoint reports no cap.
-std::string formatLimit(const AgentLimit& limit) {
+// Layout, in pixels. The bar is thin on purpose: e-ink renders a solid block
+// crisply at any height, so extra thickness only costs a row another provider
+// could have used.
+constexpr int BAR_HEIGHT = 10;
+constexpr int BAR_GAP = 6;
+constexpr int HEADER_BLOCK_HEIGHT = 34;
+constexpr int WINDOW_BLOCK_HEIGHT = 44;
+constexpr int STATUS_BLOCK_HEIGHT = 26;
+constexpr int SIDE_PADDING = 18;
+
+// At or above this the bar fills edge to edge instead of inset, so a window
+// near its cap reads as alarming from across the desk.
+constexpr int HEAVY_USE_PERCENT = 80;
+
+std::string formatUsed(const AgentWindow& window) {
   char buf[64];
-  if (limit.total > 0) {
-    snprintf(buf, sizeof(buf), "%d/%d%s", limit.used, limit.total, limit.unit.c_str());
-  } else {
-    snprintf(buf, sizeof(buf), "%d%s", limit.used, limit.unit.c_str());
-  }
-  std::string text(buf);
-  if (!limit.resets.empty()) {
-    text += " · ";
-    text += limit.resets;
-  }
-  return text;
+  snprintf(buf, sizeof(buf), "%s %d%% used", window.label.c_str(), window.usedPercent);
+  return buf;
+}
+
+std::string formatResets(const AgentWindow& window) {
+  if (window.resets.empty()) return {};
+  char buf[48];
+  snprintf(buf, sizeof(buf), "Resets in %s", window.resets.c_str());
+  return buf;
 }
 
 std::string formatUpdated(const uint32_t epoch) {
   if (epoch == 0) return I18N.get(StrId::STR_AGENT_LIMITS_NEVER);
   const auto t = static_cast<time_t>(epoch);
-  struct tm local{};
+  struct tm local {};
   if (!localtime_r(&t, &local)) return I18N.get(StrId::STR_AGENT_LIMITS_NEVER);
   char buf[16];
   strftime(buf, sizeof(buf), "%H:%M", &local);
@@ -50,109 +62,269 @@ std::string formatUpdated(const uint32_t epoch) {
 
 // Epoch seconds from the RTC, or 0 when the device has no clock set.
 uint32_t nowEpoch() {
-  struct tm local{};
+  struct tm local {};
   if (!halClock.isAvailable() || !halClock.localTime(local)) return 0;
   const time_t t = mktime(&local);
   return t > 0 ? static_cast<uint32_t>(t) : 0;
 }
 }  // namespace
 
-AgentLimitsActivity::AgentLimitsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : UiListActivity("AgentLimits", renderer, mappedInput) {}
-
-const char* AgentLimitsActivity::headerTitle() const { return I18N.get(StrId::STR_AGENT_LIMITS); }
-
 void AgentLimitsActivity::onEnter() {
-  UiListActivity::onEnter();
+  Activity::onEnter();
   AGENT_LIMITS.loadFromFile();
-  rebuildRows();
+  rebuildBlocks();
+  requestUpdate();
 }
 
 void AgentLimitsActivity::onExit() {
-  // A fetch leaves the radio and its LWIP/mbedTLS allocations behind; the other
+  // A fetch leaves the radio and its LWIP/TLS allocations behind; the other
   // network screens restart rather than read the fragmented heap.
   if (wifiStarted && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
     silentRestart();
   }
-  UiListActivity::onExit();
+  Activity::onExit();
 }
 
-void AgentLimitsActivity::rebuildRows() {
-  const auto& limits = AGENT_LIMITS.getLimits();
-
-  rowLabels_.clear();
-  rowValues_.clear();
-  rowLabels_.reserve(limits.size() + 3);
-  rowValues_.reserve(limits.size() + 3);
-
-  for (const auto& limit : limits) {
-    rowLabels_.push_back(limit.name);
-    rowValues_.push_back(formatLimit(limit));
-  }
-
-  if (limits.empty()) {
-    rowLabels_.emplace_back(I18N.get(StrId::STR_AGENT_LIMITS_NONE));
-    rowValues_.emplace_back();
-  }
-
-  // Status line: either the plan/subtitle the endpoint sent, or the age of the
-  // numbers above. Either way the user can tell how much to trust them.
-  std::string status = statusText;
-  if (status.empty()) {
-    status = AGENT_LIMITS.getSubtitle();
-    if (status.empty()) status = I18N.get(StrId::STR_AGENT_LIMITS_UPDATED);
-  }
-  rowLabels_.push_back(status);
-  rowValues_.push_back(formatUpdated(AGENT_LIMITS.getUpdatedAt()));
-
-  refreshRowIndex = static_cast<int>(rowLabels_.size());
-  rowLabels_.emplace_back(I18N.get(refreshing ? StrId::STR_AGENT_LIMITS_FETCHING : StrId::STR_AGENT_LIMITS_REFRESH));
-  rowValues_.emplace_back();
-
-  endpointRowIndex = static_cast<int>(rowLabels_.size());
-  rowLabels_.emplace_back(I18N.get(StrId::STR_AGENT_LIMITS_ENDPOINT));
-  const std::string& url = AGENT_LIMITS.getUrl();
-  rowValues_.emplace_back(url.empty() ? I18N.get(StrId::STR_AGENT_LIMITS_NOT_SET) : url);
-
-  rowItems_.assign(rowLabels_.size(), fui::ListItem{});
-  for (size_t i = 0; i < rowLabels_.size(); ++i) {
-    rowItems_[i].actionValue = static_cast<int16_t>(i);
-  }
-}
-
-void AgentLimitsActivity::buildScreen(UiScreen& screen) {
+int AgentLimitsActivity::bodyTop() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
-  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
-
-  for (size_t i = 0; i < rowItems_.size(); ++i) {
-    rowItems_[i].label = rowLabels_[i].c_str();
-    rowItems_[i].value = rowValues_[i].c_str();
-  }
-
-  fui::ListProps props;
-  props.items = rowItems_.data();
-  props.count = static_cast<int>(rowItems_.size());
-  props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
-  props.valueInset = 8;
-  props.labelText = screen.theme().smallText;
-  props.labelText.maxLines = 1;
-  syncListViewport(screen, props);
-  screen.list(props);
+  return metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
 }
 
-void AgentLimitsActivity::activateIndex(const int index) {
-  if (index == endpointRowIndex) {
+int AgentLimitsActivity::bodyHeight() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return renderer.getScreenHeight() - bodyTop() - metrics.buttonHintsHeight - metrics.verticalSpacing;
+}
+
+void AgentLimitsActivity::rebuildBlocks() {
+  blocks.clear();
+  const auto& providers = AGENT_LIMITS.getProviders();
+
+  if (providers.empty()) {
+    Block block;
+    block.kind = Block::Kind::Message;
+    block.height = STATUS_BLOCK_HEIGHT;
+    block.text =
+        I18N.get(AGENT_LIMITS.getUrl().empty() ? StrId::STR_AGENT_LIMITS_NOT_SET : StrId::STR_AGENT_LIMITS_NONE);
+    blocks.push_back(std::move(block));
+    paginate();
+    return;
+  }
+
+  size_t estimate = providers.size();
+  for (const auto& provider : providers) estimate += std::max<size_t>(provider.windows.size(), 1);
+  blocks.reserve(estimate);
+
+  for (size_t p = 0; p < providers.size(); ++p) {
+    const AgentProvider& provider = providers[p];
+
+    Block header;
+    header.kind = Block::Kind::ProviderHeader;
+    header.height = HEADER_BLOCK_HEIGHT;
+    header.providerIndex = static_cast<int>(p);
+    header.text = provider.name;
+    header.rightText = provider.status;
+    blocks.push_back(std::move(header));
+
+    if (provider.windows.empty()) {
+      // A provider with nothing to report still gets a line, so signed out
+      // reads as signed out rather than as missing.
+      Block status;
+      status.kind = Block::Kind::Status;
+      status.height = STATUS_BLOCK_HEIGHT;
+      status.providerIndex = static_cast<int>(p);
+      status.text = provider.status.empty() ? "-" : provider.status;
+      blocks.push_back(std::move(status));
+      continue;
+    }
+
+    for (size_t w = 0; w < provider.windows.size(); ++w) {
+      Block window;
+      window.kind = Block::Kind::Window;
+      window.height = WINDOW_BLOCK_HEIGHT;
+      window.providerIndex = static_cast<int>(p);
+      window.windowIndex = static_cast<int>(w);
+      window.text = formatUsed(provider.windows[w]);
+      window.rightText = formatResets(provider.windows[w]);
+      blocks.push_back(std::move(window));
+    }
+  }
+
+  paginate();
+}
+
+void AgentLimitsActivity::paginate() {
+  pageStarts.clear();
+  const int available = bodyHeight();
+  const int total = static_cast<int>(blocks.size());
+
+  int index = 0;
+  while (index < total) {
+    const int pageStart = index;
+    pageStarts.push_back(pageStart);
+
+    int used = 0;
+    while (index < total && used + blocks[index].height <= available) {
+      used += blocks[index].height;
+      ++index;
+    }
+    // A single block taller than the page would otherwise loop forever.
+    if (index == pageStart) ++index;
+
+    // Never end a page on a provider header: its first bar belongs with it.
+    if (index < total && index - 1 > pageStart && blocks[index - 1].kind == Block::Kind::ProviderHeader) {
+      --index;
+    }
+  }
+
+  if (pageStarts.empty()) pageStarts.push_back(0);
+  pageStarts.push_back(total);
+
+  const int pages = static_cast<int>(pageStarts.size()) - 1;
+  currentPage = std::clamp(currentPage, 0, std::max(0, pages - 1));
+}
+
+void AgentLimitsActivity::drawBar(const int x, const int y, const int width, const int percent) const {
+  const int filled = std::clamp(width * percent / 100, 0, width);
+
+  // Track first, so an empty bar is still visible as a bar.
+  renderer.drawRect(x, y, width, BAR_HEIGHT, true);
+  if (filled <= 2) return;
+
+  if (percent >= HEAVY_USE_PERCENT) {
+    renderer.fillRect(x, y, filled, BAR_HEIGHT, true);
+  } else {
+    // Inset so the fill never swallows the track outline.
+    renderer.fillRect(x + 1, y + 1, filled - 2, BAR_HEIGHT - 2, true);
+  }
+}
+
+void AgentLimitsActivity::drawBlock(const Block& block, const int x, const int y, const int width) const {
+  switch (block.kind) {
+    case Block::Kind::ProviderHeader: {
+      const int baseline = y + renderer.getLineHeight(UI_12_FONT_ID);
+      renderer.drawText(UI_12_FONT_ID, x, baseline, block.text.c_str(), true, EpdFontFamily::BOLD);
+      if (!block.rightText.empty()) {
+        const int w = renderer.getTextWidth(SMALL_FONT_ID, block.rightText.c_str());
+        renderer.drawText(SMALL_FONT_ID, x + width - w, baseline, block.rightText.c_str());
+      }
+      // Rule under the name, separating one provider's card from the next.
+      renderer.fillRect(x, y + HEADER_BLOCK_HEIGHT - 8, width, 1, true);
+      break;
+    }
+    case Block::Kind::Window: {
+      const int baseline = y + renderer.getLineHeight(UI_10_FONT_ID);
+      renderer.drawText(UI_10_FONT_ID, x, baseline, block.text.c_str(), true, EpdFontFamily::BOLD);
+      if (!block.rightText.empty()) {
+        const int w = renderer.getTextWidth(SMALL_FONT_ID, block.rightText.c_str());
+        renderer.drawText(SMALL_FONT_ID, x + width - w, baseline, block.rightText.c_str());
+      }
+      const auto& providers = AGENT_LIMITS.getProviders();
+      if (block.providerIndex >= 0 && block.providerIndex < static_cast<int>(providers.size())) {
+        const auto& windows = providers[block.providerIndex].windows;
+        if (block.windowIndex >= 0 && block.windowIndex < static_cast<int>(windows.size())) {
+          drawBar(x, baseline + BAR_GAP, width, windows[block.windowIndex].usedPercent);
+        }
+      }
+      break;
+    }
+    case Block::Kind::Status:
+    case Block::Kind::Message: {
+      const int baseline = y + renderer.getLineHeight(SMALL_FONT_ID);
+      renderer.drawText(SMALL_FONT_ID, x, baseline, block.text.c_str());
+      break;
+    }
+  }
+}
+
+void AgentLimitsActivity::render(RenderLock&&) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int pageWidth = renderer.getScreenWidth();
+
+  renderer.clearScreen();
+
+  std::string subtitle = statusText;
+  if (subtitle.empty()) {
+    subtitle = AGENT_LIMITS.getSubtitle();
+    if (subtitle.empty()) subtitle = formatUpdated(AGENT_LIMITS.getUpdatedAt());
+  }
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
+                 I18N.get(StrId::STR_AGENT_LIMITS), subtitle.c_str());
+
+  const int x = SIDE_PADDING;
+  const int width = pageWidth - SIDE_PADDING * 2;
+  int y = bodyTop();
+
+  const int pages = static_cast<int>(pageStarts.size()) - 1;
+  if (pages > 0) {
+    const int from = pageStarts[currentPage];
+    const int to = pageStarts[currentPage + 1];
+    for (int i = from; i < to; ++i) {
+      drawBlock(blocks[i], x, y, width);
+      y += blocks[i].height;
+    }
+  }
+
+  // The page counter only earns its space when there is more than one page.
+  if (pages > 1) {
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%d / %d", currentPage + 1, pages);
+    const int w = renderer.getTextWidth(SMALL_FONT_ID, buf);
+    renderer.drawText(SMALL_FONT_ID, (pageWidth - w) / 2, renderer.getScreenHeight() - metrics.buttonHintsHeight - 4,
+                      buf);
+  }
+
+  GUI.drawButtonHints(renderer, I18N.get(StrId::STR_BACK), I18N.get(StrId::STR_AGENT_LIMITS_REFRESH),
+                      I18N.get(StrId::STR_AGENT_LIMITS_ENDPOINT), nullptr);
+}
+
+void AgentLimitsActivity::loop() {
+  if (refreshing) return;
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    finish();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    startRefresh();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
     editEndpoint();
     return;
   }
-  if (index == refreshRowIndex && !refreshing) {
-    startRefresh();
+
+  const int pages = static_cast<int>(pageStarts.size()) - 1;
+
+  // Same tap zones as the reader: left third is back a page, the rest forward.
+  int tx = 0;
+  int ty = 0;
+  if (mappedInput.wasScreenTapped(tx, ty)) {
+    if (tx < renderer.getScreenWidth() / 3) {
+      if (currentPage > 0) {
+        --currentPage;
+        requestUpdate();
+      }
+    } else if (currentPage + 1 < pages) {
+      ++currentPage;
+      requestUpdate();
+    }
+    return;
   }
+
+  buttonNavigator.onNext([this, pages] {
+    if (currentPage + 1 < pages) {
+      ++currentPage;
+      requestUpdate();
+    }
+  });
+  buttonNavigator.onPrevious([this] {
+    if (currentPage > 0) {
+      --currentPage;
+      requestUpdate();
+    }
+  });
 }
 
 void AgentLimitsActivity::editEndpoint() {
@@ -166,7 +338,7 @@ void AgentLimitsActivity::editEndpoint() {
         }
         RenderLock lock(*this);
         statusText.clear();
-        rebuildRows();
+        rebuildBlocks();
       });
 }
 
@@ -174,7 +346,7 @@ void AgentLimitsActivity::startRefresh() {
   if (AGENT_LIMITS.getUrl().empty()) {
     RenderLock lock(*this);
     statusText = I18N.get(StrId::STR_AGENT_LIMITS_NOT_SET);
-    rebuildRows();
+    rebuildBlocks();
     return;
   }
 
@@ -182,7 +354,6 @@ void AgentLimitsActivity::startRefresh() {
     RenderLock lock(*this);
     refreshing = true;
     statusText = I18N.get(StrId::STR_AGENT_LIMITS_FETCHING);
-    rebuildRows();
   }
   requestUpdateAndWait();
 
@@ -210,6 +381,7 @@ void AgentLimitsActivity::onWifiReady(const bool connected) {
   RenderLock lock(*this);
   refreshing = false;
   statusText = status == StrId::STR_NONE_OPT ? "" : I18N.get(status);
-  rebuildRows();
+  currentPage = 0;
+  rebuildBlocks();
   requestUpdate();
 }
