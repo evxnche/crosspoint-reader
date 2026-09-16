@@ -23,7 +23,7 @@
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // File Browser, Library, File transfer, Settings
+  int count = 5;  // File Browser, Library, File transfer, Agent Limits, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -191,6 +191,9 @@ void HomeActivity::loop() {
       case HomeMenuItem::FILE_TRANSFER:
         onFileTransferOpen();
         break;
+      case HomeMenuItem::AGENT_LIMITS:
+        onAgentLimitsOpen();
+        break;
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
         break;
@@ -306,8 +309,8 @@ void HomeActivity::render(RenderLock&&) {
 
   // Build menu items dynamically
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Settings};
+                                        tr(STR_AGENT_LIMITS), tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Blocks, Settings};
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
@@ -354,5 +357,7 @@ void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 
 void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
+
+void HomeActivity::onAgentLimitsOpen() { activityManager.goToAgentLimits(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }

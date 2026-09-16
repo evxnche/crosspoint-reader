@@ -42,6 +42,8 @@ class HomeActivity final : public Activity {
     if (hasOpdsUrl) ++i;
     if (item == HomeMenuItem::FILE_TRANSFER) return i;
     ++i;
+    if (item == HomeMenuItem::AGENT_LIMITS) return i;
+    ++i;
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
     return 0;
   }
@@ -53,6 +55,7 @@ class HomeActivity final : public Activity {
     if (idx == i++) return HomeMenuItem::LIBRARY;
     if (hasOpdsUrl && idx == i++) return HomeMenuItem::OPDS_BROWSER;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
+    if (idx == i++) return HomeMenuItem::AGENT_LIMITS;
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
   }
@@ -61,6 +64,7 @@ class HomeActivity final : public Activity {
   void onLibraryOpen();
   void onSettingsOpen();
   void onFileTransferOpen();
+  void onAgentLimitsOpen();
   void onOpdsBrowserOpen();
 
   int getMenuItemCount() const;

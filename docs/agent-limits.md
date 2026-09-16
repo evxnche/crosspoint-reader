@@ -1,7 +1,7 @@
 # Agent Limits
 
-**Settings → System → Agent Limits** shows how much of each coding-agent usage
-window is spent, on the reader's screen.
+**Agent Limits**, on the home screen (and under Settings → System), shows how
+much of each coding-agent usage window is spent.
 
 E-ink holds an image with no power, so the numbers stay readable on a device
 sitting on the desk next to you — which is the point. The reader never
@@ -31,13 +31,27 @@ Check it first without serving:
 
     python3 tools/agent-limits-server.py --once
 
+To have it start at login instead of running it by hand:
+
+    ./tools/install-launchagent.sh
+
+That copies the script to `~/Library/Application Support/AgentLimits/` before
+registering it. The copy is deliberate: macOS refuses a background agent read
+access to `~/Desktop`, `~/Documents` and `~/Downloads`, so a LaunchAgent pointed
+straight at a checkout in one of those folders dies with "Operation not
+permitted". Re-run the installer after changing the script.
+
+    # to remove it again
+    launchctl bootout gui/$(id -u)/com.evan.agentlimits
+    rm ~/Library/LaunchAgents/com.evan.agentlimits.plist
+
 ### 2. Find your machine's LAN address
 
     ipconfig getifaddr en0      # macOS, Wi-Fi
 
 ### 3. Point the reader at it
 
-On the device: **Settings → System → Agent Limits → Endpoint URL**, and enter
+On the device: **Agent Limits → Endpoint URL**, and enter
 
     http://192.168.1.42:8765/limits
 

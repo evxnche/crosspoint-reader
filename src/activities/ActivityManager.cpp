@@ -11,6 +11,7 @@
 
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
+#include "agent/AgentLimitsActivity.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -244,6 +245,10 @@ void ActivityManager::goToUsbDrive() {
 }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToAgentLimits() {
+  replaceActivity(std::make_unique<AgentLimitsActivity>(renderer, mappedInput));
+}
 
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
