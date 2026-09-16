@@ -1,5 +1,26 @@
 # CrossPoint Reader
 
+> ### This is a fork
+>
+> A personal fork of [crosspoint-reader/crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader),
+> built for an Xteink X4 Pro. It adds three things upstream deliberately does not
+> carry (see their [SCOPE.md](SCOPE.md) — PDF and connectors are out of scope
+> there, and that is a reasonable call for a reader that has to run on a C3 with
+> 380KB of RAM):
+>
+> - **[PDF reading](docs/pdf-reading.md)** — PDFs are parsed once and *reflowed*
+>   into paragraphs, then read through the normal text pipeline. A page laid out
+>   for A4 is unreadable shrunk to 4.3"; the same text wrapped to your own font
+>   is an ordinary book.
+> - **[Agent limits](docs/agent-limits.md)** — a screen showing how much of each
+>   coding-agent usage window is spent, fetched from an endpoint you run.
+> - **More reading fonts** — EB Garamond, Spectral, Crimson Pro, Newsreader and
+>   JetBrains Mono added to the SD-card font build
+>   (see [docs/sd-card-fonts.md](docs/sd-card-fonts.md)).
+>
+> Everything below is upstream's documentation and still applies.
+
+
 [![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
 
 CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
