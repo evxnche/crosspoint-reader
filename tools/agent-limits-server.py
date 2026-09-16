@@ -1,161 +1,172 @@
 #!/usr/bin/env python3
 """Serve coding-agent usage to the reader's Agent Limits screen.
 
-The reader fetches one small JSON document over plain HTTP on the local
-network. This script produces that document from ccusage, which reads the
-Claude Code session logs in ~/.claude.
+Reads the history CodexBar (https://github.com/steipete/codexbar) keeps for each
+provider and serves it as the small JSON document the reader fetches.
+
+CodexBar already asks each provider for the real figure, so the percentages here
+are usage against the actual plan limit -- not an estimate reconstructed from
+token logs. Nothing is requested from any provider by this script; it only reads
+files CodexBar has already written.
 
 Usage:
     python3 tools/agent-limits-server.py
-    python3 tools/agent-limits-server.py --port 8765 --session-budget 40
+    python3 tools/agent-limits-server.py --once
+    python3 tools/agent-limits-server.py --port 8765 --max-age-hours 6
 
-Then, on the reader: Settings > System > Agent Limits > Endpoint URL, and
-enter http://<this machine's LAN IP>:8765/limits
-
-Budgets are yours to pick. Claude Code does not publish a numeric plan limit,
-so the "total" in each row is the ceiling you decide to hold yourself to; set
-a budget to 0 to show the raw number with no bar.
+Then, on the reader: Settings > System > Agent Limits > Endpoint URL, and enter
+http://<this machine's LAN IP>:8765/limits
 """
 
 import argparse
+import glob
 import json
-import shutil
-import subprocess
+import os
 import sys
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# A 5-hour rolling window is what Claude Code meters usage against.
-SESSION_WINDOW_MINUTES = 300
-# ccusage is a Node CLI; npx fetches it on first use.
-CCUSAGE = ["npx", "--yes", "ccusage@latest"]
-# Re-running ccusage per request would re-scan every session log.
-CACHE_SECONDS = 60
+HISTORY_DIR = os.path.expanduser("~/Library/Application Support/com.steipete.codexbar/history")
+
+# Display names, in the order they should appear on the reader. Providers absent
+# from this map still show, under their filename.
+PROVIDERS = {
+    "claude": "Claude",
+    "codex": "Codex",
+    "cursor": "Cursor",
+    "muse": "Muse",
+    "antigravity": "Antigravity",
+    "zai": "Z.ai",
+    "opencodego": "OpenCode",
+    "commandcode": "CommandCode",
+}
+
+# Shorter windows first: the one about to run out is the one worth seeing.
+WINDOW_ORDER = {"session": 0, "5h": 0, "weekly": 1, "week": 1, "monthly": 2, "month": 2}
+
+# The reader keeps six rows.
+MAX_ROWS = 6
+# Re-reading every request would re-parse several hundred KB of history.
+CACHE_SECONDS = 30
 
 
-def run_ccusage(args, timeout):
-    """Return parsed JSON from a ccusage subcommand, or None on any failure."""
-    try:
-        result = subprocess.run(
-            CCUSAGE + args + ["--json"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        print(f"ccusage {' '.join(args)} failed: {exc}", file=sys.stderr)
-        return None
-
-    if result.returncode != 0:
-        print(f"ccusage {' '.join(args)} exited {result.returncode}: {result.stderr.strip()}", file=sys.stderr)
-        return None
-
-    # ccusage prints progress lines before the document; start at the first brace.
-    start = result.stdout.find("{")
-    if start < 0:
+def parse_time(value):
+    if not value:
         return None
     try:
-        return json.loads(result.stdout[start:])
-    except json.JSONDecodeError as exc:
-        print(f"ccusage {' '.join(args)} returned unparseable JSON: {exc}", file=sys.stderr)
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
         return None
 
 
-def humanize_minutes(minutes):
-    minutes = max(0, int(minutes))
-    hours, mins = divmod(minutes, 60)
-    if hours and mins:
-        return f"{hours}h {mins}m"
+def humanize(delta_seconds):
+    """A short, glanceable duration: '3h 2m', '4d 15h', 'now'."""
+    seconds = int(delta_seconds)
+    if seconds <= 0:
+        return "now"
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes = seconds // 60
+    if days:
+        return f"{days}d {hours}h" if hours else f"{days}d"
     if hours:
-        return f"{hours}h"
-    return f"{mins}m"
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    return f"{minutes}m"
 
 
-def money(value):
-    """Whole dollars: the reader shows integers, and cents are noise at a glance."""
-    return int(round(value))
+def latest_entry(window):
+    """Newest sample in a window, by capture time."""
+    entries = [e for e in window.get("entries", []) if e.get("capturedAt")]
+    if not entries:
+        return None
+    return max(entries, key=lambda e: e["capturedAt"])
 
 
-def build_payload(budgets, timeout):
-    limits = []
-    subtitle = ""
+def account_windows(doc):
+    """Windows for the account CodexBar prefers, else the most recently seen."""
+    accounts = doc.get("accounts") or {}
+    if not accounts:
+        return []
 
-    blocks = run_ccusage(["blocks", "--active"], timeout)
-    active = None
-    if blocks:
-        for block in blocks.get("blocks", []):
-            if block.get("isActive"):
-                active = block
-                break
+    preferred = doc.get("preferredAccountKey")
+    if preferred in accounts:
+        return accounts[preferred]
 
-    if active:
-        remaining = active.get("projection", {}).get("remainingMinutes")
-        if remaining is None:
-            # Derive it from the window end when ccusage omits the projection.
-            end = active.get("endTime")
-            try:
-                end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
-                remaining = (end_dt - datetime.now(timezone.utc)).total_seconds() / 60
-            except (AttributeError, ValueError):
-                remaining = 0
-        elapsed = SESSION_WINDOW_MINUTES - max(0, int(remaining))
+    def newest(key):
+        stamps = [e.get("capturedAt", "") for w in accounts[key] for e in w.get("entries", [])]
+        return max(stamps, default="")
 
-        limits.append({
-            "name": "Session window",
-            "used": max(0, elapsed),
-            "total": SESSION_WINDOW_MINUTES,
-            "unit": "m",
-            "resets": humanize_minutes(remaining),
+    return accounts[max(accounts, key=newest)]
+
+
+def read_provider(path, now, max_age_seconds):
+    """Rows for one provider file, newest sample per window."""
+    name = os.path.basename(path)[: -len(".json")]
+    label = PROVIDERS.get(name, name.title())
+    try:
+        with open(path) as handle:
+            doc = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"skipping {name}: {exc}", file=sys.stderr)
+        return []
+
+    rows = []
+    for window in account_windows(doc):
+        entry = latest_entry(window)
+        if not entry:
+            continue
+        captured = parse_time(entry.get("capturedAt"))
+        if not captured:
+            continue
+        age = (now - captured).total_seconds()
+        # A provider signed out months ago should not sit on the screen looking
+        # like a live reading.
+        if age > max_age_seconds:
+            continue
+
+        window_name = (window.get("name") or "window").lower()
+        resets_at = parse_time(entry.get("resetsAt"))
+        resets = humanize((resets_at - now).total_seconds()) if resets_at else ""
+
+        rows.append({
+            "sort": (WINDOW_ORDER.get(window_name, 9), name),
+            "age": age,
+            "row": {
+                "name": f"{label} {window_name}",
+                "used": int(round(float(entry.get("usedPercent") or 0))),
+                "total": 100,
+                "unit": "%",
+                "resets": resets,
+            },
         })
-        limits.append({
-            "name": "Session spend",
-            "used": money(active.get("costUSD", 0)),
-            "total": budgets["session"],
-            "unit": "$",
-            "resets": humanize_minutes(remaining),
-        })
+    return rows
 
-        burn = active.get("burnRate", {}).get("costPerHour")
-        if burn:
-            subtitle = f"${burn:.0f}/hr burn"
-    else:
-        limits.append({
-            "name": "Session window",
-            "used": 0,
-            "total": SESSION_WINDOW_MINUTES,
-            "unit": "m",
-            "resets": "idle",
-        })
 
-    daily = run_ccusage(["daily"], timeout)
-    if daily and daily.get("daily"):
-        today = daily["daily"][-1]
-        limits.append({
-            "name": "Today",
-            "used": money(today.get("totalCost", 0)),
-            "total": budgets["daily"],
-            "unit": "$",
-            "resets": "midnight",
-        })
+def build_payload(max_age_seconds):
+    now = datetime.now(timezone.utc)
+    if not os.path.isdir(HISTORY_DIR):
+        return {"subtitle": "CodexBar not found", "limits": []}
 
-    monthly = run_ccusage(["monthly"], timeout)
-    if monthly and monthly.get("monthly"):
-        this_month = monthly["monthly"][-1]
-        limits.append({
-            "name": "This month",
-            "used": money(this_month.get("totalCost", 0)),
-            "total": budgets["monthly"],
-            "unit": "$",
-            "resets": "1st",
-        })
+    collected = []
+    for path in sorted(glob.glob(os.path.join(HISTORY_DIR, "*.json"))):
+        collected += read_provider(path, now, max_age_seconds)
 
-    return {"subtitle": subtitle, "limits": limits}
+    if not collected:
+        return {"subtitle": "No fresh usage data", "limits": []}
+
+    # Providers in the configured order, shortest window first within each.
+    priority = {key: index for index, key in enumerate(PROVIDERS)}
+    collected.sort(key=lambda item: (priority.get(item["sort"][1], 99), item["sort"][0]))
+
+    freshest = min(item["age"] for item in collected)
+    subtitle = f"CodexBar · {humanize(freshest)} ago" if freshest > 60 else "CodexBar · live"
+
+    return {"subtitle": subtitle, "limits": [item["row"] for item in collected[:MAX_ROWS]]}
 
 
 class LimitsHandler(BaseHTTPRequestHandler):
-    budgets = {"session": 0, "daily": 0, "monthly": 0}
-    timeout_seconds = 60
+    max_age_seconds = 24 * 3600
     _cache = {"at": 0.0, "body": b""}
 
     def do_GET(self):
@@ -165,14 +176,13 @@ class LimitsHandler(BaseHTTPRequestHandler):
 
         now = time.time()
         if now - self._cache["at"] > CACHE_SECONDS or not self._cache["body"]:
-            payload = build_payload(self.budgets, self.timeout_seconds)
+            payload = build_payload(self.max_age_seconds)
             LimitsHandler._cache = {"at": now, "body": json.dumps(payload).encode()}
 
         body = self._cache["body"]
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        # The reader has no clock guarantees; let it decide when to refetch.
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
@@ -185,32 +195,26 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: all interfaces).")
-    parser.add_argument("--session-budget", type=int, default=50, help="USD ceiling for one 5h window; 0 for none.")
-    parser.add_argument("--daily-budget", type=int, default=150, help="USD ceiling for a day; 0 for none.")
-    parser.add_argument("--monthly-budget", type=int, default=2000, help="USD ceiling for a month; 0 for none.")
-    parser.add_argument("--ccusage-timeout", type=int, default=60, help="Seconds to wait for each ccusage call.")
+    parser.add_argument("--max-age-hours", type=float, default=24,
+                        help="Hide a window whose newest sample is older than this.")
     parser.add_argument("--once", action="store_true", help="Print the JSON and exit, without serving.")
     args = parser.parse_args()
 
-    budgets = {
-        "session": args.session_budget,
-        "daily": args.daily_budget,
-        "monthly": args.monthly_budget,
-    }
+    max_age_seconds = args.max_age_hours * 3600
 
-    if not shutil.which("npx"):
-        print("npx not found; install Node.js so ccusage can run.", file=sys.stderr)
+    if not os.path.isdir(HISTORY_DIR):
+        print(f"CodexBar history not found at {HISTORY_DIR}", file=sys.stderr)
+        print("Install and run CodexBar, or point HISTORY_DIR at its history folder.", file=sys.stderr)
         return 1
 
     if args.once:
-        print(json.dumps(build_payload(budgets, args.ccusage_timeout), indent=2))
+        print(json.dumps(build_payload(max_age_seconds), indent=2))
         return 0
 
-    LimitsHandler.budgets = budgets
-    LimitsHandler.timeout_seconds = args.ccusage_timeout
+    LimitsHandler.max_age_seconds = max_age_seconds
     server = ThreadingHTTPServer((args.host, args.port), LimitsHandler)
     print(f"Serving agent limits on http://{args.host}:{args.port}/limits")
-    print("Point the reader at http://<this machine's LAN IP>:%d/limits" % args.port)
+    print(f"Point the reader at http://<this machine's LAN IP>:{args.port}/limits")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

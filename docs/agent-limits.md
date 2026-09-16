@@ -13,9 +13,19 @@ guesses at them: it fetches from a URL you control.
 
     python3 tools/agent-limits-server.py
 
-It prints the port it is listening on (8765 by default). The script reads your
-Claude Code session logs through [ccusage](https://github.com/ryoppippi/ccusage)
-and needs Node installed for `npx`.
+It prints the port it is listening on (8765 by default).
+
+The script reads the per-provider history that
+[CodexBar](https://github.com/steipete/codexbar) keeps in
+`~/Library/Application Support/com.steipete.codexbar/history/`. CodexBar has
+already asked each provider for the real figure, so these are percentages of
+your **actual plan limit** — not an estimate rebuilt from token logs. This
+script only reads files that already exist; it contacts no provider itself, and
+needs CodexBar installed and running.
+
+Windows whose newest sample is over 24 hours old are hidden, so a provider you
+signed out of months ago does not sit on screen looking live. Change that with
+`--max-age-hours`.
 
 Check it first without serving:
 
@@ -45,16 +55,17 @@ always know how much to trust what you are looking at.
 
 ## The response format
 
-Any server that returns this shape works; ccusage is just the default source.
+Any server that returns this shape works; CodexBar is just where the bundled
+script happens to read from.
 
 ```json
 {
-  "subtitle": "$17/hr burn",
+  "subtitle": "CodexBar · live",
   "limits": [
-    { "name": "Session window", "used": 104, "total": 300,  "unit": "m", "resets": "3h 16m" },
-    { "name": "Session spend",  "used": 25,  "total": 50,   "unit": "$", "resets": "3h 16m" },
-    { "name": "Today",          "used": 44,  "total": 150,  "unit": "$", "resets": "midnight" },
-    { "name": "This month",     "used": 279, "total": 2000, "unit": "$", "resets": "1st" }
+    { "name": "Claude session", "used": 48, "total": 100, "unit": "%", "resets": "3h 1m" },
+    { "name": "Claude weekly",  "used": 13, "total": 100, "unit": "%", "resets": "4d 14h" },
+    { "name": "Codex session",  "used": 2,  "total": 100, "unit": "%", "resets": "3h 6m" },
+    { "name": "Codex weekly",   "used": 56, "total": 100, "unit": "%", "resets": "2d 13h" }
   ]
 }
 ```
@@ -71,18 +82,15 @@ Any server that returns this shape works; ccusage is just the default source.
 At most 6 rows are kept. A response that parses but lists no usable row leaves
 the previous values in place rather than blanking the screen.
 
-## A note on the "limits"
+## Using a different source
 
-Claude Code does not publish a numeric plan limit, so `total` is whatever
-ceiling **you** decide to hold yourself to. Set your own with
+Nothing in the firmware knows about CodexBar. The reader consumes the JSON above
+and nothing else, so pointing it at a different source means replacing this one
+script — or pointing the Endpoint URL at something else entirely.
 
-    python3 tools/agent-limits-server.py --session-budget 40 --daily-budget 120
-
-or pass `0` for a row you would rather just watch than bound.
-
-The one genuinely fixed number here is the session window: usage is metered
-against a rolling 5 hours, and "Session window 104/300m" is really telling you
-how much of that window has elapsed.
+`total` is always 100 here because CodexBar reports a percentage of the plan
+limit. A source with no notion of a cap can send `total: 0`, and the reader
+shows the bare number instead of a ratio.
 
 ## Security
 
