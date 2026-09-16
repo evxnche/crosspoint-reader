@@ -169,6 +169,50 @@ families:
       italic:     {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/vollkorn/Vollkorn-Italic%5Bwght%5D.ttf", variable: {wght: 400}}
       bolditalic: {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/vollkorn/Vollkorn-Italic%5Bwght%5D.ttf", variable: {wght: 700}}
 
+  - name: EBGaramond
+    description: "Classic old-style serif for long-form reading (Latin, Greek, Cyrillic)"
+    scripts: [latin, cyrillic, greek]
+    intervals: latin-ext,greek,cyrillic,ipa-chars
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf", variable: {wght: 400}}
+      bold:       {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf", variable: {wght: 700}}
+      italic:     {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond-Italic%5Bwght%5D.ttf", variable: {wght: 400}}
+      bolditalic: {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond-Italic%5Bwght%5D.ttf", variable: {wght: 700}}
+
+  - name: Spectral
+    description: "Screen-first serif with a generous x-height (Latin, Cyrillic)"
+    scripts: [latin, cyrillic]
+    intervals: latin-ext,cyrillic,ipa-chars
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/spectral/Spectral-Regular.ttf"}
+      bold:       {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/spectral/Spectral-Bold.ttf"}
+      italic:     {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/spectral/Spectral-Italic.ttf"}
+      bolditalic: {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/spectral/Spectral-BoldItalic.ttf"}
+
+  - name: CrimsonPro
+    description: "Book serif in the Minion tradition (Latin, Greek)"
+    scripts: [latin, greek]
+    intervals: latin-ext,greek,ipa-chars
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/crimsonpro/CrimsonPro%5Bwght%5D.ttf", variable: {wght: 400}}
+      bold:       {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/crimsonpro/CrimsonPro%5Bwght%5D.ttf", variable: {wght: 700}}
+      italic:     {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/crimsonpro/CrimsonPro-Italic%5Bwght%5D.ttf", variable: {wght: 400}}
+      bolditalic: {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/crimsonpro/CrimsonPro-Italic%5Bwght%5D.ttf", variable: {wght: 700}}
+
+  - name: Newsreader
+    description: "Editorial serif, optical size pinned for body text (Latin)"
+    scripts: [latin]
+    intervals: latin-ext,ipa-chars
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/newsreader/Newsreader%5Bopsz,wght%5D.ttf", variable: {opsz: 16, wght: 400}}
+      bold:       {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/newsreader/Newsreader%5Bopsz,wght%5D.ttf", variable: {opsz: 16, wght: 700}}
+      italic:     {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/newsreader/Newsreader-Italic%5Bopsz,wght%5D.ttf", variable: {opsz: 16, wght: 400}}
+      bolditalic: {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/newsreader/Newsreader-Italic%5Bopsz,wght%5D.ttf", variable: {opsz: 16, wght: 700}}
+
   # ── Sans-serif ─────────────────────────────────────────────────────────
 
   - name: NotoSansExtended
@@ -249,6 +293,17 @@ families:
       bold:       {url: "https://raw.githubusercontent.com/adobe-fonts/source-code-pro/release/TTF/SourceCodePro-Bold.ttf"}
       italic:     {url: "https://raw.githubusercontent.com/adobe-fonts/source-code-pro/release/TTF/SourceCodePro-It.ttf"}
       bolditalic: {url: "https://raw.githubusercontent.com/adobe-fonts/source-code-pro/release/TTF/SourceCodePro-BoldIt.ttf"}
+
+  - name: JetBrainsMono
+    description: "Coding monospace with a tall x-height (Latin, Greek, Cyrillic)"
+    scripts: [latin, cyrillic, greek]
+    intervals: latin-ext,greek,cyrillic,ipa-chars
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf", variable: {wght: 400}}
+      bold:       {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf", variable: {wght: 700}}
+      italic:     {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono-Italic%5Bwght%5D.ttf", variable: {wght: 400}}
+      bolditalic: {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono-Italic%5Bwght%5D.ttf", variable: {wght: 700}}
 
   # ── Dyslexia ───────────────────────────────────────────────────────────────
 
