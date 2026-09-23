@@ -5,6 +5,7 @@
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <Txt.h>
 
 #include "PdfDocument.h"
 
@@ -106,21 +107,27 @@ bool Pdf::extract(const PdfTextExtractor::ProgressFn progress, void* ctx) {
   if (!load()) return false;
   setupCacheDir();
 
-  PdfDocument doc;
-  if (!doc.open(filepath, cachePath)) return false;
-
-  const std::string title = doc.documentTitle();
-  const size_t pageCount = doc.pageCount();
-
-  PdfTextExtractor extractor;
-  const PdfTextExtractor::Options options;
-  const std::string tempPath = cachePath + "/text.tmp";
-  if (!extractor.run(doc, tempPath, options, progress, ctx)) {
-    Storage.remove(tempPath.c_str());
-    doc.close();
+  // Both on the heap: this runs on the 16KB loop task, and together they hold
+  // several KB of caches and interpreter state.
+  auto doc = makeUniqueNoThrow<PdfDocument>();
+  auto extractor = makeUniqueNoThrow<PdfTextExtractor>();
+  if (!doc || !extractor) {
+    LOG_ERR(TAG, "OOM: PDF parser");
     return false;
   }
-  doc.close();
+  if (!doc->open(filepath, cachePath)) return false;
+
+  const std::string title = doc->documentTitle();
+  const size_t pageCount = doc->pageCount();
+
+  const PdfTextExtractor::Options options;
+  const std::string tempPath = cachePath + "/text.tmp";
+  if (!extractor->run(*doc, tempPath, options, progress, ctx)) {
+    Storage.remove(tempPath.c_str());
+    doc->close();
+    return false;
+  }
+  doc->close();
 
   // Publish atomically so an interrupted extraction never looks complete.
   Storage.remove(getTextPath().c_str());
@@ -129,19 +136,22 @@ bool Pdf::extract(const PdfTextExtractor::ProgressFn progress, void* ctx) {
     Storage.remove(tempPath.c_str());
     return false;
   }
+  // The reader's page index, progress and bookmarks are byte offsets into the
+  // previous text; against new text they point at the wrong place.
+  clearReaderCache();
 
   meta.sourceSize = fileSize;
   meta.sourceTime = fileTime;
   meta.pageCount = static_cast<uint32_t>(pageCount);
-  meta.emptyPages = static_cast<uint32_t>(extractor.emptyPages());
+  meta.emptyPages = static_cast<uint32_t>(extractor->emptyPages());
   meta.title = title;
   metaLoaded = true;
   writeMeta(meta);
 
   lastTotalPages = pageCount;
-  lastEmptyPages = extractor.emptyPages();
+  lastEmptyPages = extractor->emptyPages();
   LOG_INF(TAG, "Extracted %s: %u pages, %u chars", filepath.c_str(), static_cast<unsigned>(pageCount),
-          static_cast<unsigned>(extractor.charactersWritten()));
+          static_cast<unsigned>(extractor->charactersWritten()));
   return true;
 }
 
@@ -155,7 +165,12 @@ std::string Pdf::getTitle() {
   return filename;
 }
 
+bool Pdf::clearReaderCache() const { return Txt(getTextPath(), cacheBasePath).clearCache(); }
+
 bool Pdf::clearCache() const {
+  // The plain-text reader keeps its own cache keyed on the text path; leaving
+  // it would reopen a replaced PDF at the old book's page.
+  clearReaderCache();
   if (!Storage.exists(cachePath.c_str())) return true;
   if (!Storage.removeDir(cachePath.c_str())) {
     LOG_ERR(TAG, "Failed to clear cache");

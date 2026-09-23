@@ -1,6 +1,7 @@
 #include "PdfSource.h"
 
 #include <Logging.h>
+#include <Memory.h>
 
 #include <algorithm>
 #include <cstring>
@@ -9,6 +10,11 @@ bool PdfFileSource::open(const char* tag, const std::string& path) {
   close();
   logTag = tag;
   filePath = path;
+  window = makeUniqueNoThrow<uint8_t[]>(WINDOW);
+  if (!window) {
+    LOG_ERR(tag, "OOM: read window");
+    return false;
+  }
   if (!Storage.openFileForRead(tag, path, file)) {
     LOG_ERR(tag, "Cannot open %s", path.c_str());
     return false;
@@ -26,6 +32,7 @@ void PdfFileSource::close() {
     file.close();
     opened = false;
   }
+  window.reset();
   fileSize = 0;
   pos = 0;
   windowStart = 0;
@@ -42,7 +49,7 @@ bool PdfFileSource::fill() {
   if (!opened || pos >= fileSize) return false;
   if (!file.seek(pos)) return false;
   const size_t want = std::min(WINDOW, fileSize - pos);
-  const int got = file.read(window, want);
+  const int got = file.read(window.get(), want);
   if (got <= 0) {
     windowLen = 0;
     return false;
@@ -68,7 +75,7 @@ size_t PdfFileSource::read(uint8_t* dest, size_t len) {
   // Serve whatever the current window already covers before touching the card.
   if (pos >= windowStart && pos < windowStart + windowLen) {
     const size_t avail = std::min(len, windowStart + windowLen - pos);
-    std::memcpy(dest, window + (pos - windowStart), avail);
+    std::memcpy(dest, window.get() + (pos - windowStart), avail);
     pos += avail;
     done += avail;
   }
@@ -88,7 +95,7 @@ size_t PdfFileSource::read(uint8_t* dest, size_t len) {
     } else {
       if (!fill()) return done;
       const size_t avail = std::min(remaining, windowLen);
-      std::memcpy(dest + done, window, avail);
+      std::memcpy(dest + done, window.get(), avail);
       pos += avail;
       done += avail;
     }

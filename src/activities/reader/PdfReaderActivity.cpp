@@ -59,9 +59,9 @@ bool PdfReaderActivity::loadBook() {
     return false;
   }
 
-  // From here the extracted text is an ordinary book. Its cache lives under the
-  // extracted file's own hash, so progress and bookmarks survive re-extraction
-  // only when the source is unchanged - which is the behaviour we want.
+  // From here the extracted text is an ordinary book. Its reader cache is keyed
+  // on the text path, and Pdf clears it whenever the text is rebuilt, so
+  // progress and bookmarks never carry over to a replaced document.
   txt = makeUniqueNoThrow<Txt>(pdf->getTextPath(), "/.crosspoint");
   if (!txt) {
     LOG_ERR(TAG, "OOM: Txt");

@@ -328,3 +328,24 @@ TEST_F(PdfExtractTest, RecoversFromBrokenXref) {
 }
 
 }  // namespace
+
+// A simple (one-byte) font whose ToUnicode CMap declares a two-byte code space,
+// as many producers emit. Codes are still one byte each; reading them in pairs
+// used to blank the page, and a book set entirely this way was refused as a scan.
+TEST_F(PdfExtractTest, SimpleFontIgnoresTwoByteToUnicodeCodespace) {
+  const std::string cmap =
+      "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n"
+      "1 begincodespacerange <0000> <FFFF> endcodespacerange\n"
+      "1 beginbfrange <0020> <007E> <0020> endbfrange\n"
+      "endcmap CMapName currentdict /CMap defineresource pop end end\n";
+  PdfBuilder builder;
+  const int catalog = builder.addObject("<< /Type /Catalog /Pages 2 0 R >>");
+  builder.addObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  builder.addObject(
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+      "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>");
+  builder.addObject(streamObject("", "BT /F1 12 Tf 1 0 0 1 72 600 Tm (Hello world.) Tj ET\n"));
+  builder.addObject("<< /Type /Font /Subtype /TrueType /BaseFont /Arial /ToUnicode 6 0 R >>");
+  builder.addObject(streamObject("", cmap));
+  EXPECT_EQ(extract(builder.build(catalog)), "Hello world.\n\n");
+}

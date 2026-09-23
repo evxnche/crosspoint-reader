@@ -433,11 +433,12 @@ void PdfFontMap::parseToUnicode(PdfDocument& doc, const PdfObject& streamObj, co
           }
         }
       }
-    } else if (obj.text == "begincodespacerange") {
-      // The code space width decides how the extractor slices a show string.
-      PdfObject lo = lexer.parseObject();
-      if (lo.type == PdfType::String && lo.text.size() >= 2) twoByte = true;
     }
+    // begincodespacerange is deliberately ignored. A ToUnicode CMap's code
+    // space does not set how show strings are sliced: simple fonts are always
+    // one byte per code, and many producers still declare <0000> <FFFF> for
+    // them. Honouring it read every pair of letters as one code and blanked
+    // the page. Code width comes from the font's /Subtype alone.
     operands.clear();
   }
 

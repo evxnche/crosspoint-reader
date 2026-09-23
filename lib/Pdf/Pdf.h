@@ -55,6 +55,8 @@ class Pdf {
 
   [[nodiscard]] std::string metaPath() const { return cachePath + "/pdf.meta"; }
   bool readMeta(Meta& out) const;
+  // Drop the plain-text reader's index, progress and bookmarks for our text.
+  bool clearReaderCache() const;
   bool writeMeta(const Meta& meta) const;
   [[nodiscard]] std::string findCoverImage() const;
 

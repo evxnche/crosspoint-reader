@@ -108,11 +108,17 @@ bool PdfDocument::open(const std::string& path, const std::string& scratchDir) {
 
   // The header may be preceded by junk; %PDF- within the first kilobyte is the
   // accepted tolerance and also our format check.
-  uint8_t head[1024];
-  const size_t got = src.read(head, sizeof(head));
+  constexpr size_t HEAD_LEN = 1024;
+  auto head = makeUniqueNoThrow<uint8_t[]>(HEAD_LEN);
+  if (!head) {
+    LOG_ERR(TAG, "OOM: header buffer");
+    close();
+    return false;
+  }
+  const size_t got = src.read(head.get(), HEAD_LEN);
   bool sawHeader = false;
   for (size_t i = 0; got >= 5 && i + 5 <= got; ++i) {
-    if (std::memcmp(head + i, "%PDF-", 5) == 0) {
+    if (std::memcmp(head.get() + i, "%PDF-", 5) == 0) {
       sawHeader = true;
       break;
     }

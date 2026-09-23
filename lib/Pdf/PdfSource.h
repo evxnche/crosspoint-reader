@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,9 @@ class PdfSource {
 // The parser seeks constantly (object index, page tree, per-page content), and
 // an unbuffered HalFile::read of one byte per get() is dominated by mutex and
 // FAT overhead. A single block-sized window absorbs the sequential runs.
+//
+// The window lives on the heap: extraction runs on the loop task (16KB), and the
+// parser keeps several of these open at once, some of them as locals.
 class PdfFileSource final : public PdfSource {
  public:
   PdfFileSource() = default;
@@ -60,7 +64,7 @@ class PdfFileSource final : public PdfSource {
   size_t pos = 0;  // logical read position
   size_t windowStart = 0;
   size_t windowLen = 0;
-  uint8_t window[WINDOW] = {};
+  std::unique_ptr<uint8_t[]> window;
 };
 
 // Read-only view over a buffer the caller owns for the lifetime of the source.

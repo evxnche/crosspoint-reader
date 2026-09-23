@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,8 @@
 // Buffered byte sink. Decoded stream data is written to a scratch file rather
 // than a heap buffer: a content stream for a dense page decompresses well past
 // what the DRAM heap can spare once the reader, fonts, and framebuffer are up.
+// The staging buffer is heap-allocated for the same stack reason as
+// PdfFileSource's window.
 class PdfSink {
  public:
   ~PdfSink() { finish(); }
@@ -30,7 +33,7 @@ class PdfSink {
   bool opened = false;
   size_t written = 0;
   size_t fill = 0;
-  uint8_t buf[BUF] = {};
+  std::unique_ptr<uint8_t[]> buf;
 };
 
 // Post-decompression predictor (PDF 32000-1 table 10). Wraps a sink and

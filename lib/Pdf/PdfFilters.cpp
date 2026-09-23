@@ -2,6 +2,7 @@
 
 #include <InflateStream.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -13,6 +14,11 @@
 
 bool PdfSink::open(const char* tag, const std::string& path) {
   finish();
+  if (!buf) buf = makeUniqueNoThrow<uint8_t[]>(BUF);
+  if (!buf) {
+    LOG_ERR(tag, "OOM: sink buffer");
+    return false;
+  }
   Storage.remove(path.c_str());
   if (!Storage.openFileForWrite(tag, path, file)) {
     LOG_ERR(tag, "Cannot write %s", path.c_str());
@@ -29,12 +35,12 @@ bool PdfSink::write(const uint8_t* data, size_t len) {
   written += len;
   while (len > 0) {
     const size_t take = std::min(len, BUF - fill);
-    std::memcpy(buf + fill, data, take);
+    std::memcpy(buf.get() + fill, data, take);
     fill += take;
     data += take;
     len -= take;
     if (fill == BUF) {
-      if (file.write(buf, BUF) != BUF) return false;
+      if (file.write(buf.get(), BUF) != BUF) return false;
       fill = 0;
     }
   }
@@ -45,7 +51,7 @@ bool PdfSink::finish() {
   if (!opened) return true;
   bool ok = true;
   if (fill > 0) {
-    ok = file.write(buf, fill) == fill;
+    ok = file.write(buf.get(), fill) == fill;
     fill = 0;
   }
   file.close();
@@ -179,17 +185,23 @@ bool inflateRange(const char* tag, PdfSource& src, const size_t start, const siz
   }
   if (zlibWrapped) inflate.setZlibWrapped();
 
-  RangeReader reader{&src, len, {}};
+  // Both buffers on the heap: this runs at the bottom of a deep loop-task stack.
+  constexpr size_t CHUNK = 512;
+  auto reader = makeUniqueNoThrow<RangeReader>(&src, len);
+  auto chunk = makeUniqueNoThrow<uint8_t[]>(CHUNK);
+  if (!reader || !chunk) {
+    LOG_ERR(tag, "OOM: inflate buffers");
+    return false;
+  }
   src.seek(start);
-  inflate.setFill(rangeFill, &reader);
+  inflate.setFill(rangeFill, reader.get());
 
-  uint8_t chunk[512];
   size_t total = 0;
   while (true) {
     size_t produced = 0;
-    const InflateStream::Status st = inflate.readAtMost(chunk, sizeof(chunk), &produced);
+    const InflateStream::Status st = inflate.readAtMost(chunk.get(), CHUNK, &produced);
     if (produced > 0) {
-      if (!out.write(chunk, produced)) return false;
+      if (!out.write(chunk.get(), produced)) return false;
       total += produced;
     }
     if (st == InflateStream::Status::Done) return true;
@@ -329,9 +341,12 @@ bool decodeLzw(PdfSource& src, const size_t start, const size_t len, PredictorSi
   constexpr int MAX_CODES = 4096;
   // The dictionary is a prefix chain: each entry points at its predecessor and
   // adds one byte. Storing expanded strings would need megabytes in the worst case.
-  auto* prefix = static_cast<uint16_t*>(malloc(MAX_CODES * (sizeof(uint16_t) + 1)));
+  // The expansion stack shares the allocation: at 4KB it cannot live on the
+  // loop task's stack, which the whole parser above it shares.
+  auto* prefix = static_cast<uint16_t*>(malloc(MAX_CODES * (sizeof(uint16_t) + 2)));
   if (!prefix) return false;
   auto* suffix = reinterpret_cast<uint8_t*>(prefix + MAX_CODES);
+  uint8_t* stack = suffix + MAX_CODES;
 
   src.seek(start);
   size_t remaining = len;
@@ -340,7 +355,6 @@ bool decodeLzw(PdfSource& src, const size_t start, const size_t len, PredictorSi
   int codeWidth = 9;
   int next = 258;
   int prev = -1;
-  uint8_t stack[MAX_CODES];
   bool ok = true;
 
   auto readCode = [&]() -> int {
@@ -374,7 +388,7 @@ bool decodeLzw(PdfSource& src, const size_t start, const size_t len, PredictorSi
 
     size_t sp = 0;
     while (walk >= 256) {
-      if (walk >= MAX_CODES || sp >= sizeof(stack)) {
+      if (walk >= MAX_CODES || sp >= MAX_CODES) {
         ok = false;
         break;
       }
