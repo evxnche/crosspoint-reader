@@ -663,7 +663,7 @@ void ParsedText::ensureRubyCapacity() {
 }
 
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& renderer, const int fontId) const {
-  if (!isFirstLine || !isNaturalAlign) {
+  if (firstLineConsumed || !isFirstLine || !isNaturalAlign) {
     return 0;
   }
   if (blockStyle.textIndentDefined) {
@@ -739,6 +739,8 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
 
   // Remove consumed words so size() reflects only remaining words
   if (lineCount > 0) {
+    firstLineConsumed = true;
+
     const size_t consumed = lineBreakIndices[lineCount - 1];
     words.erase(words.begin(), words.begin() + consumed);
     wordStyles.erase(wordStyles.begin(), wordStyles.begin() + consumed);
@@ -1071,7 +1073,7 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
 
   std::vector<size_t> lineBreakIndices;
   size_t currentIndex = 0;
-  bool isFirstLine = true;
+  bool isFirstLine = !firstLineConsumed;
 
   while (currentIndex < wordWidths.size()) {
     const size_t lineStart = currentIndex;
