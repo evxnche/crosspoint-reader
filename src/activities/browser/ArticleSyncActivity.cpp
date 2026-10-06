@@ -321,5 +321,7 @@ void ArticleSyncActivity::render(RenderLock&&) {
   }
 
   const bool busy = state == State::Connecting || state == State::Working;
-  GUI.drawButtonHints(renderer, tr(STR_BACK), busy ? nullptr : tr(STR_DONE), nullptr, nullptr);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), busy ? "" : tr(STR_DONE), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer();
 }

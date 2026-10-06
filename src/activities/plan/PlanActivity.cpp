@@ -316,9 +316,11 @@ void PlanActivity::render(RenderLock&&) {
   // Front Left/Right are named after the screens they lead to.
   const auto& screens = PLAN.getScreens();
   const int count = static_cast<int>(screens.size());
-  const char* previous = count > 1 ? screens[(screenIndex + count - 1) % count].title.c_str() : nullptr;
-  const char* next = count > 1 ? screens[(screenIndex + 1) % count].title.c_str() : nullptr;
-  GUI.drawButtonHints(renderer, tr(STR_BACK), tr(STR_PLAN_REFRESH), previous, next);
+  const char* previous = count > 1 ? screens[(screenIndex + count - 1) % count].title.c_str() : "";
+  const char* next = count > 1 ? screens[(screenIndex + 1) % count].title.c_str() : "";
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_PLAN_REFRESH), previous, next);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer();
 }
 
 void PlanActivity::showScreen(const int index) {
@@ -455,11 +457,16 @@ void PlanActivity::onWifiReady(const bool connected) {
     std::string body;
     if (!HttpDownloader::fetchUrl(PLAN.getUrl(), body)) {
       LOG_ERR(TAG, "Fetch failed");
-    } else if (!PLAN.applyResponse(body, nowEpoch())) {
-      status = tr(STR_PLAN_BAD_DATA);
     } else {
-      PLAN.saveToFile();
-      status = nullptr;
+      // render() reads the plan, and the display shares the SD card's SPI bus,
+      // so replace and save it under the render lock.
+      RenderLock lock(*this);
+      if (!PLAN.applyResponse(body, nowEpoch())) {
+        status = tr(STR_PLAN_BAD_DATA);
+      } else {
+        PLAN.saveToFile();
+        status = nullptr;
+      }
     }
   }
 
