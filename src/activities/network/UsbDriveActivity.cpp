@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
 
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
@@ -14,6 +15,10 @@ void UsbDriveActivity::onEnter() {
   Activity::onEnter();
   resetUi();
   app.setScreen(&UsbDriveActivity::driveScreen, this);
+
+  // Persist before raw USB ownership unmounts the filesystem. The marker also
+  // survives cable removal or power loss before the handoff reboot.
+  library::markLibraryIndexDirty();
 
   // Show the safety instructions before giving the raw SD card to the USB host.
   requestUpdateAndWait();

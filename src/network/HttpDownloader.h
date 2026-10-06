@@ -4,6 +4,8 @@
 #include <functional>
 #include <string>
 
+class Stream;
+
 /**
  * HTTP client utility for fetching content and downloading files. Built on
  * esp_http_client: https is verified against the CA bundle, plain http is
@@ -15,6 +17,7 @@ class HttpDownloader {
   // Called with each body chunk as it arrives; return false to abort. Lets a
   // streaming parser consume the response without buffering the whole body.
   using DataCallback = std::function<bool(const uint8_t* data, size_t len)>;
+  using CancelCallback = std::function<bool()>;
 
   enum DownloadError {
     OK = 0,
@@ -34,7 +37,7 @@ class HttpDownloader {
    * Fetch text content from a URL with optional credentials.
    */
   static bool fetchUrl(const std::string& url, std::string& outContent, const std::string& username = "",
-                       const std::string& password = "");
+                       const std::string& password = "", const CancelCallback& shouldCancel = nullptr);
 
   static bool fetchUrl(const std::string& url, Stream& stream, const std::string& username = "",
                        const std::string& password = "");
@@ -55,5 +58,6 @@ class HttpDownloader {
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
                                       ProgressCallback progress = nullptr, bool* cancelFlag = nullptr,
                                       const std::string& username = "", const std::string& password = "",
-                                      bool downgradeRedirectsToHttp = false);
+                                      bool downgradeRedirectsToHttp = false,
+                                      const CancelCallback& shouldCancel = nullptr);
 };

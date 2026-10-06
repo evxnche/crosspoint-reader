@@ -1,10 +1,13 @@
 #include "ArticleSyncActivity.h"
 
 #include <ArduinoJson.h>
+#include <BoardConfig.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
 #include <WiFi.h>
 
@@ -45,7 +48,8 @@ std::string articlesUrl(const std::string& opdsUrl) {
 bool isInboxUrl(const std::string& url) {
   std::string path = url.substr(0, url.find('?'));
   while (!path.empty() && path.back() == '/') path.pop_back();
-  return path.size() > strlen(OPDS_SUFFIX) && path.compare(path.size() - strlen(OPDS_SUFFIX), std::string::npos, OPDS_SUFFIX) == 0;
+  return path.size() > strlen(OPDS_SUFFIX) &&
+         path.compare(path.size() - strlen(OPDS_SUFFIX), std::string::npos, OPDS_SUFFIX) == 0;
 }
 }  // namespace
 
@@ -61,8 +65,11 @@ bool ArticleSyncActivity::findInboxServer(OpdsServer& out) {
 
 void ArticleSyncActivity::onEnter() {
   Activity::onEnter();
-  state = State::Connecting;
-  statusLine = tr(STR_CHECKING_WIFI);
+  {
+    RenderLock lock(*this);
+    state = State::Connecting;
+    statusLine = tr(STR_CHECKING_WIFI);
+  }
   requestUpdate();
 
   if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
@@ -75,12 +82,16 @@ void ArticleSyncActivity::onEnter() {
 
 void ArticleSyncActivity::onExit() {
   Activity::onExit();
-  // Same teardown as the catalog browser: a restart returns the heap the TLS
-  // and Wi-Fi stacks fragmented.
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
     delay(30);
-    silentRestart();
+    const auto heap = HalMemory::getInternalHeap();
+    LOG_INF(TAG, "Wi-Fi stopped: internal free=%u max_block=%u", static_cast<unsigned>(heap.freeBytes),
+            static_cast<unsigned>(heap.largestBlockBytes));
+    if (!BoardConfig::isX4Pro() || heap.freeBytes < HttpDownloader::MIN_TLS_FREE_HEAP ||
+        heap.largestBlockBytes < HttpDownloader::MIN_TLS_MAX_ALLOC)
+      silentRestart();
   }
 }
 
@@ -133,7 +144,8 @@ void ArticleSyncActivity::saveSynced() const {
 
 bool ArticleSyncActivity::fetchPending(std::vector<Pending>& out) {
   std::string body;
-  if (!HttpDownloader::fetchUrl(articlesUrl(server.url), body, server.username, server.password)) {
+  if (!HttpDownloader::fetchUrl(articlesUrl(server.url), body, server.username, server.password,
+                                [this] { return pollCancel(); })) {
     LOG_ERR(TAG, "Fetching the article list failed");
     return false;
   }
@@ -167,12 +179,19 @@ bool ArticleSyncActivity::fetchPending(std::vector<Pending>& out) {
   return true;
 }
 
+bool ArticleSyncActivity::pollCancel() {
+  mappedInput.update(true);
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || mappedInput.wasBackGesture()) cancel = true;
+  return cancel;
+}
+
 std::string ArticleSyncActivity::destinationFor(const Pending& article) const {
   std::string name = StringUtils::sanitizeFilename(article.title.empty() ? article.id : article.title, MAX_TITLE_BYTES);
   if (name.empty()) name = article.id;
   std::string path = std::string(ARTICLES_DIR) + "/" + name + ".epub";
   // Two different articles with the same title keep both files.
-  if (Storage.exists(path.c_str())) path = std::string(ARTICLES_DIR) + "/" + name + " " + article.id.substr(0, 6) + ".epub";
+  if (Storage.exists(path.c_str()))
+    path = std::string(ARTICLES_DIR) + "/" + name + " " + article.id.substr(0, 6) + ".epub";
   return path;
 }
 
@@ -189,13 +208,20 @@ void ArticleSyncActivity::sync() {
   loadSynced();
   std::vector<Pending> pending;
   if (!fetchPending(pending)) {
+    if (cancel) {
+      finish();
+      return;
+    }
     fail(tr(STR_ARTICLES_LIST_FAILED));
     return;
   }
 
   if (!Storage.exists(ARTICLES_DIR)) Storage.mkdir(ARTICLES_DIR);
   // Rebuildable SD-font caches give TLS the room a multi-MB transfer needs.
-  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
+  {
+    RenderLock lock(*this);
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
+  }
 
   {
     RenderLock lock(*this);
@@ -208,7 +234,10 @@ void ArticleSyncActivity::sync() {
     if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
         ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
       LOG_ERR(TAG, "Low heap (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-      ++failures;
+      {
+        RenderLock lock(*this);
+        ++failures;
+      }
       break;
     }
     {
@@ -228,18 +257,18 @@ void ArticleSyncActivity::sync() {
     auto result = HttpDownloader::downloadToFile(
         UrlUtils::buildUrl(server.url, article.href), part,
         [this, &lastDraw](const size_t done, const size_t size) {
-          bytesDone = done;
-          bytesTotal = size;
-          // The loop is blocked for the transfer; pump Back here so it can cancel.
-          mappedInput.update(true);
-          if (mappedInput.wasReleased(MappedInputManager::Button::Back)) cancel = true;
+          {
+            RenderLock lock(*this);
+            bytesDone = done;
+            bytesTotal = size;
+          }
           const unsigned long now = millis();
           if (now - lastDraw >= PROGRESS_MIN_MS || (size > 0 && done >= size)) {
             lastDraw = now;
             requestUpdate(true);
           }
         },
-        &cancel, server.username, server.password);
+        &cancel, server.username, server.password, false, [this] { return pollCancel(); });
     if (result == HttpDownloader::OK && !Storage.rename(part.c_str(), dest.c_str())) {
       LOG_ERR(TAG, "Rename failed: %s", part.c_str());
       Storage.remove(part.c_str());
@@ -248,18 +277,27 @@ void ArticleSyncActivity::sync() {
 
     if (result == HttpDownloader::OK) {
       clearBookCache(dest);
+      library::markLibraryIndexDirty();
       synced.push_back(article.id);
       // Saved per article, so a run cut short (power off, a crash) does not
       // download everything again next time under " <id>" names.
       saveSynced();
-      fetchedTitles.push_back(article.title);
+      {
+        RenderLock lock(*this);
+        fetchedTitles.push_back(article.title);
+      }
       LOG_INF(TAG, "Saved %s", dest.c_str());
     } else if (result != HttpDownloader::ABORTED) {
       LOG_ERR(TAG, "Download failed (%d): %s", static_cast<int>(result), article.id.c_str());
+      RenderLock lock(*this);
       ++failures;
     }
   }
 
+  if (cancel) {
+    finish();
+    return;
+  }
   RenderLock lock(*this);
   state = State::Done;
   requestUpdate(true);
@@ -267,9 +305,13 @@ void ArticleSyncActivity::sync() {
 
 void ArticleSyncActivity::loop() {
   if (state == State::Connecting || state == State::Working) return;
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
+  } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (state == State::Done)
+      activityManager.goToFileBrowser(ARTICLES_DIR);
+    else
+      finish();
   }
 }
 
@@ -331,7 +373,8 @@ void ArticleSyncActivity::render(RenderLock&&) {
   }
 
   const bool busy = state == State::Connecting || state == State::Working;
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), busy ? "" : tr(STR_DONE), "", "");
+  const auto labels = mappedInput.mapLabels(
+      tr(STR_BACK), busy ? "" : (state == State::Done ? tr(STR_ARTICLES_OPEN) : tr(STR_DONE)), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

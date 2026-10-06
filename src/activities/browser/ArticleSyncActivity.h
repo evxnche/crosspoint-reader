@@ -40,6 +40,7 @@ class ArticleSyncActivity final : public Activity {
   void onWifiReady(bool connected);
   void sync();
   bool fetchPending(std::vector<Pending>& out);
+  bool pollCancel();
   std::string destinationFor(const Pending& article) const;
   void loadSynced();
   void saveSynced() const;

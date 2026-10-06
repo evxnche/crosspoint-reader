@@ -1,8 +1,10 @@
 #include "PlanActivity.h"
 
 #include <Arduino.h>
+#include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalMemory.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <WiFi.h>
@@ -50,7 +52,7 @@ EpdFontFamily::Style styleFor(const PlanRow::Kind kind) {
 std::string formatUpdated(const uint32_t epoch) {
   if (epoch == 0) return {};
   const auto t = static_cast<time_t>(epoch);
-  struct tm local {};
+  struct tm local{};
   if (!localtime_r(&t, &local)) return {};
   char time[16];
   strftime(time, sizeof(time), "%H:%M", &local);
@@ -61,7 +63,7 @@ std::string formatUpdated(const uint32_t epoch) {
 
 // Epoch seconds from the RTC, or 0 when the device has no clock set.
 uint32_t nowEpoch() {
-  struct tm local {};
+  struct tm local{};
   if (!halClock.isAvailable() || !halClock.localTime(local)) return 0;
   const time_t t = mktime(&local);
   return t > 0 ? static_cast<uint32_t>(t) : 0;
@@ -74,18 +76,23 @@ bool hits(const Rect& r, const int x, const int y) {
 
 void PlanActivity::onEnter() {
   Activity::onEnter();
+  RenderLock lock(*this);
   PLAN.loadFromFile();
   rebuildBlocks();
   requestUpdate();
 }
 
 void PlanActivity::onExit() {
-  // A fetch leaves the radio and its LWIP/TLS allocations behind; the other
-  // network screens restart rather than read the fragmented heap.
   if (wifiStarted && WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
     delay(30);
-    silentRestart();
+    const auto heap = HalMemory::getInternalHeap();
+    LOG_INF(TAG, "Wi-Fi stopped: internal free=%u max_block=%u", static_cast<unsigned>(heap.freeBytes),
+            static_cast<unsigned>(heap.largestBlockBytes));
+    if (!BoardConfig::isX4Pro() || heap.freeBytes < HttpDownloader::MIN_TLS_FREE_HEAP ||
+        heap.largestBlockBytes < HttpDownloader::MIN_TLS_MAX_ALLOC)
+      silentRestart();
   }
   Activity::onExit();
 }
@@ -101,8 +108,8 @@ int PlanActivity::bodyTop() const { return tabsTop() + TAB_HEIGHT + TAB_GAP; }
 // device without touch. The page counter sits just above it.
 int PlanActivity::controlsTop() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int bottom = renderer.getScreenHeight() - metrics.verticalSpacing -
-                     (mappedInput.hasTouch() ? 0 : metrics.buttonHintsHeight);
+  const int bottom =
+      renderer.getScreenHeight() - metrics.verticalSpacing - (mappedInput.hasTouch() ? 0 : metrics.buttonHintsHeight);
   return bottom - (mappedInput.hasTouch() ? CONTROL_HEIGHT : 0);
 }
 
@@ -143,8 +150,8 @@ void PlanActivity::rebuildBlocks() {
     Block block;
     block.row = static_cast<int>(i);
     const int font = fontFor(rows[i].kind);
-    block.lines = renderer.wrappedText(font, rows[i].text.c_str(), right - textX(block.row), MAX_LINES,
-                                       styleFor(rows[i].kind));
+    block.lines =
+        renderer.wrappedText(font, rows[i].text.c_str(), right - textX(block.row), MAX_LINES, styleFor(rows[i].kind));
     block.height = static_cast<int>(block.lines.size()) * renderer.getLineHeight(font) + ROW_GAP;
     if (rows[i].kind == PlanRow::Kind::Head && i > 0) block.height += HEAD_GAP;
     blocks.push_back(std::move(block));
@@ -216,8 +223,8 @@ void PlanActivity::drawTabs() const {
     renderer.drawText(UI_10_FONT_ID, r.x + (r.width - w) / 2, r.y + (r.height - lineHeight) / 2, label.c_str(), !active,
                       style);
   }
-  renderer.fillRect(SIDE_PADDING, tabsTop() + TAB_HEIGHT + TAB_GAP / 2, renderer.getScreenWidth() - SIDE_PADDING * 2,
-                    1, true);
+  renderer.fillRect(SIDE_PADDING, tabsTop() + TAB_HEIGHT + TAB_GAP / 2, renderer.getScreenWidth() - SIDE_PADDING * 2, 1,
+                    true);
 }
 
 void PlanActivity::drawControls() const {
@@ -324,6 +331,7 @@ void PlanActivity::render(RenderLock&&) {
 }
 
 void PlanActivity::showScreen(const int index) {
+  RenderLock lock(*this);
   const int count = static_cast<int>(PLAN.getScreens().size());
   if (count < 2) return;
   screenIndex = (index + count) % count;
@@ -333,6 +341,7 @@ void PlanActivity::showScreen(const int index) {
 }
 
 void PlanActivity::turnPage(const int direction) {
+  RenderLock lock(*this);
   const int pages = static_cast<int>(pageStarts.size()) - 1;
   const int target = currentPage + direction;
   if (target < 0 || target >= pages) return;
@@ -455,8 +464,22 @@ void PlanActivity::onWifiReady(const bool connected) {
     }
     requestUpdateAndWait();
     std::string body;
-    if (!HttpDownloader::fetchUrl(PLAN.getUrl(), body)) {
+    bool cancelled = false;
+    if (!HttpDownloader::fetchUrl(PLAN.getUrl(), body, "", "", [this, &cancelled] {
+          mappedInput.update(true);
+          if (mappedInput.wasReleased(MappedInputManager::Button::Back) || mappedInput.wasBackGesture())
+            cancelled = true;
+          return cancelled;
+        })) {
       LOG_ERR(TAG, "Fetch failed");
+      if (cancelled) {
+        {
+          RenderLock lock(*this);
+          refreshing = false;
+        }
+        finish();
+        return;
+      }
     } else {
       // render() reads the plan, and the display shares the SD card's SPI bus,
       // so replace and save it under the render lock.

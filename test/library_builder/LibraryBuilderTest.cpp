@@ -62,6 +62,24 @@ TEST_F(LibraryBuilderTest, UnchangedRebuildReusesMetadataAndDoesNotReplaceIndex)
   EXPECT_EQ(fake::files[INDEX]->bytes, old);
 }
 
+TEST_F(LibraryBuilderTest, DirtyRebuildFindsPublishedArticlesAndUsbCopies) {
+  initial();
+  ASSERT_TRUE(markLibraryIndexDirty());
+  EXPECT_TRUE(isLibraryIndexDirty());
+  fake::add("/Articles/new.epub");
+  fake::add("/Pushed Books/new.epub");
+  ASSERT_TRUE(buildLibraryIndex("/", stats, true));
+  EXPECT_FALSE(isLibraryIndexDirty());
+  LibraryIndexFile index;
+  ASSERT_TRUE(index.open(INDEX));
+  EXPECT_EQ(index.bookCount(), 4u);
+  std::vector<std::string> paths;
+  paths.reserve(index.bookCount());
+  for (uint16_t row = 0; row < index.bookCount(); ++row) paths.push_back(pathAt(index, SortOrder::TitleAsc, row));
+  EXPECT_NE(std::find(paths.begin(), paths.end(), "/Articles/new.epub"), paths.end());
+  EXPECT_NE(std::find(paths.begin(), paths.end(), "/Pushed Books/new.epub"), paths.end());
+}
+
 TEST_F(LibraryBuilderTest, FolderHeavyUnchangedReconciliationIoScalesLinearly) {
   const auto measure = [this](const unsigned count) {
     fake::reset();
