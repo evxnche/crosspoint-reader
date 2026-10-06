@@ -18,8 +18,8 @@
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
-#include "activities/browser/ArticleSyncActivity.h"
 #include "RecentBooksStore.h"
+#include "activities/browser/ArticleSyncActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -120,12 +120,15 @@ void HomeActivity::onEnter() {
   hasOpdsServers = OPDS_STORE.hasServers();
   OpdsServer inbox;
   hasArticleInbox = ArticleSyncActivity::findInboxServer(inbox);
+  if (hasArticleInbox && OPDS_STORE.getCount() == 1) hasOpdsServers = false;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   loadRecentBooks(metrics.homeRecentBooksCount);
 
   const auto base = static_cast<int>(recentBooks.size());
-  selectorIndex = initialMenuItem == HomeMenuItem::NONE ? 0 : base + menuItemToIndex(initialMenuItem, hasOpdsServers, hasArticleInbox);
+  selectorIndex = initialMenuItem == HomeMenuItem::NONE
+                      ? 0
+                      : base + menuItemToIndex(initialMenuItem, hasOpdsServers, hasArticleInbox);
 
   // Trigger first update
   requestUpdate();
@@ -317,8 +320,8 @@ void HomeActivity::render(RenderLock&&) {
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
-                                        tr(STR_PLAN), tr(STR_SETTINGS_TITLE)};
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER), tr(STR_PLAN),
+                                        tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Blocks, Settings};
 
   if (hasOpdsServers) {
