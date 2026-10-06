@@ -220,9 +220,13 @@ void ArticleSyncActivity::sync() {
     requestUpdate(true);
 
     const std::string dest = destinationFor(article);
+    // Downloaded under a temporary name and renamed when complete, so a power
+    // cut mid-transfer leaves no half-written book in /Articles.
+    const std::string part = dest + ".part";
+    Storage.remove(part.c_str());
     unsigned long lastDraw = 0;
-    const auto result = HttpDownloader::downloadToFile(
-        UrlUtils::buildUrl(server.url, article.href), dest,
+    auto result = HttpDownloader::downloadToFile(
+        UrlUtils::buildUrl(server.url, article.href), part,
         [this, &lastDraw](const size_t done, const size_t size) {
           bytesDone = done;
           bytesTotal = size;
@@ -236,10 +240,18 @@ void ArticleSyncActivity::sync() {
           }
         },
         &cancel, server.username, server.password);
+    if (result == HttpDownloader::OK && !Storage.rename(part.c_str(), dest.c_str())) {
+      LOG_ERR(TAG, "Rename failed: %s", part.c_str());
+      Storage.remove(part.c_str());
+      result = HttpDownloader::FILE_ERROR;
+    }
 
     if (result == HttpDownloader::OK) {
       clearBookCache(dest);
       synced.push_back(article.id);
+      // Saved per article, so a run cut short (power off, a crash) does not
+      // download everything again next time under " <id>" names.
+      saveSynced();
       fetchedTitles.push_back(article.title);
       LOG_INF(TAG, "Saved %s", dest.c_str());
     } else if (result != HttpDownloader::ABORTED) {
@@ -247,8 +259,6 @@ void ArticleSyncActivity::sync() {
       ++failures;
     }
   }
-
-  saveSynced();
 
   RenderLock lock(*this);
   state = State::Done;
