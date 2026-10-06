@@ -11,6 +11,9 @@
 >   into paragraphs, then read through the normal text pipeline. A page laid out
 >   for A4 is unreadable shrunk to 4.3"; the same text wrapped to your own font
 >   is an ordinary book.
+> - **Plan** — a home-screen entry with Tasks, Projects and Calendar screens
+>   for the desk pal, fetched over WiFi from desk-voice `/api/plan`
+>   (URL: hold Confirm on the Plan screen).
 > - **More reading fonts** — EB Garamond, Spectral, Crimson Pro, Newsreader and
 >   JetBrains Mono added to the SD-card font build
 >   (see [docs/sd-card-fonts.md](docs/sd-card-fonts.md)).
