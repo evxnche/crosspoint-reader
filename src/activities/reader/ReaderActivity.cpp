@@ -1,5 +1,6 @@
 #include "ReaderActivity.h"
 
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Memory.h>
@@ -85,6 +86,13 @@ void ReaderActivity::rememberBookOnceRendered() {
 
 void ReaderActivity::onExit() {
   Activity::onExit();
+
+  // Keep rebuildable font buffers from pinning the heap between reading sessions.
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->releaseSdFontCaches();
+  }
+
+  LOG_INF("MEM", "reader exit: free=%u max_block=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
   APP_STATE.readerActivityLoadCount = 0;
