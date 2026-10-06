@@ -1,6 +1,7 @@
 #include "OpdsBookBrowserActivity.h"
 
 #include <Arduino.h>
+#include <BoardConfig.h>
 #include <FontCacheManager.h>
 #include <FreeInkUIIcon.h>
 #include <GfxRenderer.h>
@@ -15,6 +16,7 @@
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/reader/ReaderActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
@@ -73,6 +75,11 @@ void OpdsBookBrowserActivity::onExit() {
   navigationHistory.clear();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
+    if (openingDownloadedBook) {
+      WiFi.disconnect(true);
+      WiFi.mode(WIFI_OFF);
+      return;
+    }
     WiFi.disconnect(false);
     delay(30);
     silentRestart();
@@ -554,6 +561,21 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   if (result == HttpDownloader::OK) {
     clearBookCache(filename);
     library::markLibraryIndexDirty();
+    if (BoardConfig::isX4Pro()) {
+      // Use the existing reader factory: one screen-lifetime allocation, with
+      // a recoverable error if the queued reader cannot be allocated.
+      auto reader = ReaderActivity::create(renderer, mappedInput, filename, false);
+      if (!reader) {
+        RenderLock lock(*this);
+        state = BrowserState::ERROR;
+        errorMessage = tr(STR_MEMORY_ERROR);
+        requestUpdate();
+        return;
+      }
+      openingDownloadedBook = true;
+      activityManager.replaceActivity(std::move(reader));
+      return;
+    }
     state = BrowserState::LOADING;
     statusMessage = tr(STR_LOADING);
     fetchFeed(currentPath);

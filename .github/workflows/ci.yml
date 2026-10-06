@@ -181,6 +181,9 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build/test --output-on-failure -j
 
+      - name: Check inbox download-to-reader transition
+        run: python3 test/test_opds_download_open.py
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:
