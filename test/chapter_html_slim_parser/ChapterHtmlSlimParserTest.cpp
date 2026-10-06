@@ -70,6 +70,40 @@ TEST_F(ChapterHtmlSlimParserTest, RubySurvivesPartialParagraphExtraction) {
   EXPECT_EQ(lines, 2u);
 }
 
+TEST_F(ChapterHtmlSlimParserTest, SoftFlushDoesNotIndentContinuationLinesAgain) {
+  BlockStyle style;
+  style.textIndent = 12;
+  style.textIndentDefined = true;
+  style.alignment = CssTextAlign::Left;
+  ParsedText text(false, false, false, style);
+  for (int i = 0; i < 10; ++i) text.addWord("a", EpdFontFamily::REGULAR);
+  std::vector<int16_t> starts;
+  const auto collect = [&](std::unique_ptr<TextBlock> line, auto) { starts.push_back(line->wordXpos(0)); };
+  text.layoutAndExtractLines(renderer, 0, 40, collect, false);
+  ASSERT_GT(text.size(), 0u);
+  text.layoutAndExtractLines(renderer, 0, 40, collect);
+  ASSERT_GE(starts.size(), 3u);
+  EXPECT_EQ(starts.front(), 12);
+  for (size_t i = 1; i < starts.size(); ++i) EXPECT_EQ(starts[i], 0);
+}
+
+TEST_F(ChapterHtmlSlimParserTest, SoftFlushAppliesParagraphTopSpacingOnce) {
+  BlockStyle style;
+  style.marginTop = 8;
+  style.paddingTop = 4;
+  parser.viewportWidth = 40;
+  parser.currentTextBlock = std::make_unique<ParsedText>(false, false, false, style);
+  for (int i = 0; i < 10; ++i) parser.currentTextBlock->addWord("a", EpdFontFamily::REGULAR);
+  parser.makePages(false);
+  parser.makePages();
+  ASSERT_NE(parser.currentPage, nullptr);
+  ASSERT_GE(parser.currentPage->elements.size(), 3u);
+  EXPECT_EQ(parser.currentPage->elements.front()->yPos, 12);
+  for (size_t i = 1; i < parser.currentPage->elements.size(); ++i) {
+    EXPECT_EQ(parser.currentPage->elements[i]->yPos - parser.currentPage->elements[i - 1]->yPos, 16);
+  }
+}
+
 TEST_F(ChapterHtmlSlimParserTest, UnequalTableCellsAndRubySurvivePageBreaks) {
   parser.viewportWidth = 240;
   parser.viewportHeight = 32;

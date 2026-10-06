@@ -90,6 +90,11 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 47
+
+Version 47 keeps the serialized layout unchanged and invalidates sections built
+before paragraph indentation and top spacing were preserved across soft flushes.
+
 ### Version 46
 
 Version 46 keeps the version 45 serialized layout unchanged. It was bumped
