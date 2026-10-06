@@ -3,17 +3,14 @@
 > ### This is a fork
 >
 > A personal fork of [crosspoint-reader/crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader),
-> built for an Xteink X4 Pro. It adds three things upstream deliberately does not
-> carry (see their [SCOPE.md](SCOPE.md) — PDF and connectors are out of scope
-> there, and that is a reasonable call for a reader that has to run on a C3 with
-> 380KB of RAM):
+> built for an Xteink X4 Pro. It adds two things upstream does not carry (see
+> their [SCOPE.md](SCOPE.md) — PDF is out of scope there, and that is a
+> reasonable call for a reader that has to run on a C3 with 380KB of RAM):
 >
 > - **[PDF reading](docs/pdf-reading.md)** — PDFs are parsed once and *reflowed*
 >   into paragraphs, then read through the normal text pipeline. A page laid out
 >   for A4 is unreadable shrunk to 4.3"; the same text wrapped to your own font
 >   is an ordinary book.
-> - **[Agent limits](docs/agent-limits.md)** — a screen showing how much of each
->   coding-agent usage window is spent, fetched from an endpoint you run.
 > - **More reading fonts** — EB Garamond, Spectral, Crimson Pro, Newsreader and
 >   JetBrains Mono added to the SD-card font build
 >   (see [docs/sd-card-fonts.md](docs/sd-card-fonts.md)).

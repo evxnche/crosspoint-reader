@@ -29,7 +29,6 @@ enum class SettingAction {
   TextSettings,
   KeyboardLayouts,
   HomeButton,
-  AgentLimits,
   About,
 };
 
