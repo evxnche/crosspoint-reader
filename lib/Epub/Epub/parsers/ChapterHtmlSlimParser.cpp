@@ -2234,7 +2234,6 @@ void ChapterHtmlSlimParser::makePages(const bool includeLastLine) {
       },
       includeLastLine);
 
-
   // Trailing spacing and footnotes only apply when the block is finalized
   if (includeLastLine) {
     // Fallback: transfer any remaining pending footnotes to current page.

@@ -440,7 +440,6 @@ bool FileBrowserActivity::handleButtons() {
   return false;
 }
 
-
 std::string getFileExtension(const std::string& filename) {
   if (filename.back() == '/') {
     return "";
