@@ -13,6 +13,7 @@
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
+#include "browser/ArticleSyncActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
@@ -269,6 +270,12 @@ void ActivityManager::goToBrowser() {
   } else {
     replaceActivity(std::make_unique<OpdsServerListActivity>(renderer, mappedInput, true));
   }
+}
+
+void ActivityManager::goToArticleSync() {
+  OpdsServer inbox;
+  if (!ArticleSyncActivity::findInboxServer(inbox)) return;
+  replaceActivity(std::make_unique<ArticleSyncActivity>(renderer, mappedInput, std::move(inbox)));
 }
 
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
