@@ -31,6 +31,7 @@ class PdfSink {
 
   HalFile file;
   bool opened = false;
+  bool failed = false;
   size_t written = 0;
   size_t fill = 0;
   std::unique_ptr<uint8_t[]> buf;

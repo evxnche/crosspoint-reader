@@ -512,13 +512,20 @@ bool PdfTextExtractor::run(PdfDocument& doc, const std::string& outPath, const O
   PdfSink sink;
   if (!sink.open(TAG, outPath)) return false;
   out = &sink;
+  bool complete = true;
 
   const size_t total = doc.pageCount();
   for (size_t i = 0; i < total; ++i) {
-    if (progress && !progress(ctx, i, total)) break;
+    if (progress && !progress(ctx, i, total)) {
+      complete = false;
+      break;
+    }
 
     PdfObject page, resources;
-    if (!doc.getPage(i, page, resources)) continue;
+    if (!doc.getPage(i, page, resources)) {
+      complete = false;
+      break;
+    }
 
     // The media box gives the header/footer band its coordinates.
     PdfObject box = doc.lookup(page, "MediaBox");
@@ -561,14 +568,23 @@ bool PdfTextExtractor::run(PdfDocument& doc, const std::string& outPath, const O
 
     for (const auto& stream : streams) {
       const std::string contentPath = scratchDir + "/content.bin";
-      if (!doc.decodeStream(stream, contentPath)) continue;
+      if (stream.streamLen == 0) continue;
+      if (!doc.decodeStream(stream, contentPath)) {
+        Storage.remove(contentPath.c_str());
+        complete = false;
+        break;
+      }
       PdfFileSource contentSrc;
       if (contentSrc.open(TAG, contentPath)) {
-        runContent(doc, contentSrc, resources, Matrix{}, 0);
+        complete = runContent(doc, contentSrc, resources, Matrix{}, 0);
         contentSrc.close();
+      } else {
+        complete = false;
       }
       Storage.remove(contentPath.c_str());
+      if (!complete) break;
     }
+    if (!complete) break;
 
     flushLine();
     if (!pageProducedText) ++emptyPageCount;
@@ -591,5 +607,5 @@ bool PdfTextExtractor::run(PdfDocument& doc, const std::string& outPath, const O
   const bool ok = sink.finish();
   LOG_INF(TAG, "Extracted %u chars from %u pages (%u empty)", static_cast<unsigned>(charCount),
           static_cast<unsigned>(total), static_cast<unsigned>(emptyPageCount));
-  return ok;
+  return ok && complete;
 }

@@ -10,6 +10,9 @@
 #include <cstdio>
 #include <string>
 
+inline std::string pdfFailWritePath;
+inline int pdfWritesBeforeFailure = -1;
+
 class HalFile {
  public:
   HalFile() = default;
@@ -20,6 +23,7 @@ class HalFile {
 
   bool openFile(const std::string& path, const char* mode) {
     close();
+    path_ = path;
     file_ = std::fopen(path.c_str(), mode);
     return file_ != nullptr;
   }
@@ -48,7 +52,10 @@ class HalFile {
     return static_cast<int>(std::fread(buffer, 1, count, file_));
   }
 
-  size_t write(const void* buffer, const size_t count) { return file_ ? std::fwrite(buffer, 1, count, file_) : 0; }
+  size_t write(const void* buffer, const size_t count) {
+    if (path_ == pdfFailWritePath && pdfWritesBeforeFailure >= 0 && pdfWritesBeforeFailure-- == 0) return 0;
+    return file_ ? std::fwrite(buffer, 1, count, file_) : 0;
+  }
 
   bool close() {
     if (!file_) return false;
@@ -62,6 +69,7 @@ class HalFile {
 
  private:
   std::FILE* file_ = nullptr;
+  std::string path_;
 };
 
 class HalStorage {

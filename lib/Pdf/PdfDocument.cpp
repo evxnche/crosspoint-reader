@@ -617,21 +617,26 @@ bool PdfDocument::loadObject(const uint32_t num, PdfObject& out) {
     if (!e) return false;
   }
 
-  bool ok;
+  bool ok = false;
   if (e->inObjStm) {
     XrefEntry copy = *e;
     ok = loadFromObjStm(copy, out);
   } else {
-    src.seek(e->offset);
-    PdfLexer lexer(src);
-    const std::string numTok = lexer.nextToken();
-    (void)lexer.nextToken();  // generation
-    if (lexer.nextToken() != "obj") return false;
-    if (std::strtoul(numTok.c_str(), nullptr, 10) != num) return false;
-    out = lexer.parseObject();
-    if (out.type == PdfType::Stream) fixStreamLength(out, src);
-    ok = true;
+    if (src.seek(e->offset)) {
+      PdfLexer lexer(src);
+      const std::string numTok = lexer.nextToken();
+      (void)lexer.nextToken();  // generation
+      if (lexer.nextToken() == "obj" && std::strtoul(numTok.c_str(), nullptr, 10) == num) {
+        out = lexer.parseObject();
+        if (out.type == PdfType::Stream) fixStreamLength(out, src);
+        ok = true;
+      }
+    }
   }
+
+  // A present entry can still point to the wrong object. Retry once with the
+  // scanned index; scanAllObjects() latches scanned before loading objects.
+  if (!ok && !scanned && scanAllObjects()) return loadObject(num, out);
 
   if (ok) {
     CacheSlot& slot = cache[cacheNext];

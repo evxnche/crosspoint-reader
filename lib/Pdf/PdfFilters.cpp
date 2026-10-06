@@ -25,13 +25,14 @@ bool PdfSink::open(const char* tag, const std::string& path) {
     return false;
   }
   opened = true;
+  failed = false;
   written = 0;
   fill = 0;
   return true;
 }
 
 bool PdfSink::write(const uint8_t* data, size_t len) {
-  if (!opened) return false;
+  if (!opened || failed) return false;
   written += len;
   while (len > 0) {
     const size_t take = std::min(len, BUF - fill);
@@ -40,7 +41,10 @@ bool PdfSink::write(const uint8_t* data, size_t len) {
     data += take;
     len -= take;
     if (fill == BUF) {
-      if (file.write(buf.get(), BUF) != BUF) return false;
+      if (file.write(buf.get(), BUF) != BUF) {
+        failed = true;
+        return false;
+      }
       fill = 0;
     }
   }
@@ -48,15 +52,16 @@ bool PdfSink::write(const uint8_t* data, size_t len) {
 }
 
 bool PdfSink::finish() {
-  if (!opened) return true;
-  bool ok = true;
-  if (fill > 0) {
+  if (!opened) return !failed;
+  bool ok = !failed;
+  if (ok && fill > 0) {
     ok = file.write(buf.get(), fill) == fill;
     fill = 0;
   }
-  file.close();
+  const bool closed = file.close();
+  failed = !ok || !closed;
   opened = false;
-  return ok;
+  return !failed;
 }
 
 // ----------------------------------------------------------- PredictorSink ---

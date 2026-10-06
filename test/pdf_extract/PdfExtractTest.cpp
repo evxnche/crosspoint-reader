@@ -90,6 +90,8 @@ std::string zlibStored(const std::string& data) {
 class PdfExtractTest : public ::testing::Test {
  protected:
   void SetUp() override {
+    pdfFailWritePath.clear();
+    pdfWritesBeforeFailure = -1;
     char pattern[] = "/tmp/cpr_pdf_XXXXXX";
     ASSERT_NE(mkdtemp(pattern), nullptr);
     dir = pattern;
@@ -154,6 +156,34 @@ TEST_F(PdfExtractTest, RejectsNonPdf) {
   const std::string path = writePdf("this is not a PDF at all");
   PdfDocument doc;
   EXPECT_FALSE(doc.open(path, dir));
+}
+
+TEST_F(PdfExtractTest, FailsWhenOutputWriteFailsEvenIfLaterWritesSucceed) {
+  std::string prose;
+  for (int i = 0; i < 300; ++i) prose += "reading ";
+  PdfDocument doc;
+  ASSERT_TRUE(doc.open(writePdf(onePage("BT /F1 12 Tf 72 600 Td (" + prose + ") Tj ET")), dir));
+  pdfFailWritePath = dir + "/out.txt";
+  pdfWritesBeforeFailure = 0;
+  PdfTextExtractor extractor;
+  EXPECT_FALSE(extractor.run(doc, pdfFailWritePath, {}, nullptr, nullptr));
+}
+
+TEST_F(PdfExtractTest, FailsWhenDecodedContentCannotBeWritten) {
+  PdfDocument doc;
+  ASSERT_TRUE(doc.open(writePdf(onePage("BT /F1 12 Tf 72 600 Td (Do not cache a missing page.) Tj ET")), dir));
+  pdfFailWritePath = dir + "/content.bin";
+  pdfWritesBeforeFailure = 0;
+  PdfTextExtractor extractor;
+  EXPECT_FALSE(extractor.run(doc, dir + "/out.txt", {}, nullptr, nullptr));
+}
+
+TEST_F(PdfExtractTest, RecoversWrongContentObjectOffsetThroughObjectScan) {
+  std::string bytes = onePage("BT /F1 12 Tf 72 600 Td (Recovered text.) Tj ET");
+  const size_t contentEntry = bytes.find("xref\n") + std::string("xref\n0 6\n").size() + 4 * 20;
+  ASSERT_LT(contentEntry + 10, bytes.size());
+  bytes.replace(contentEntry, 10, "0000000009");
+  EXPECT_EQ(extract(bytes), "Recovered text.\n\n");
 }
 
 // The core promise: lines that share a paragraph come back as one long line, so
@@ -307,7 +337,8 @@ TEST_F(PdfExtractTest, ReportsProgressAndHonoursAbort) {
 
   PdfTextExtractor extractor;
   const PdfTextExtractor::Options options;
-  ASSERT_TRUE(extractor.run(doc, dir + "/out.txt", options, progress, &counter));
+  // Cancellation must not let Pdf::extract publish an incomplete text cache.
+  ASSERT_FALSE(extractor.run(doc, dir + "/out.txt", options, progress, &counter));
   EXPECT_EQ(counter.calls, 1);
   EXPECT_EQ(extractor.charactersWritten(), 0u);
   doc.close();
