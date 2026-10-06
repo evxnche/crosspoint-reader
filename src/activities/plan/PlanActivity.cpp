@@ -444,6 +444,14 @@ void PlanActivity::onWifiReady(const bool connected) {
   const char* status = tr(STR_PLAN_FAILED);
 
   if (connected) {
+    // The fetch blocks this task for as long as the network takes (a captive
+    // portal can stall it for minutes), so show the plan screen saying so
+    // rather than leave the Wi-Fi screen up looking frozen.
+    {
+      RenderLock lock(*this);
+      statusText = tr(STR_PLAN_FETCHING);
+    }
+    requestUpdateAndWait();
     std::string body;
     if (!HttpDownloader::fetchUrl(PLAN.getUrl(), body)) {
       LOG_ERR(TAG, "Fetch failed");
