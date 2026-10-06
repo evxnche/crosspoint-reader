@@ -3,7 +3,7 @@
 > ### This is a fork
 >
 > A personal fork of [crosspoint-reader/crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader),
-> built for an Xteink X4 Pro. It adds two things upstream does not carry (see
+> built for an Xteink X4 Pro. It adds three things upstream does not carry (see
 > their [SCOPE.md](SCOPE.md) — PDF is out of scope there, and that is a
 > reasonable call for a reader that has to run on a C3 with 380KB of RAM):
 >
