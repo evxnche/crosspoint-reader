@@ -18,9 +18,10 @@
 // vector-of-string layout cost ~250 throwing allocations per page load, which
 // was the primary driver of heap fragmentation on the ESP32-C3.
 //
-// Arena layout, in order (2-byte alignment holds by construction: all 16-bit
-// arrays come first and the arena base is allocator-aligned; RISC-V faults on
-// unaligned multi-byte access):
+// Arena layout, in order (alignment holds by construction: the 32-bit array
+// comes first, then all 16-bit arrays, and the arena base is allocator-aligned;
+// RISC-V faults on unaligned multi-byte access):
+//   uint32_t visOff[wordCount]         visible-codepoint offset of word i in its spine
 //   uint16_t textOff[wordCount]        byte offset of word i's text in text[]
 //   int16_t  xpos[wordCount]
 //   uint16_t focusSuffixX[wordCount]   present only when focusPresent
@@ -58,6 +59,7 @@ class TextBlock final : public Block {
   std::unique_ptr<uint8_t[]> arena;
   // Typed views into the arena, bound once after the arena is filled. All
   // 16-bit bases sit at even offsets, so direct dereference is alignment-safe.
+  const uint32_t* visOffArr = nullptr;
   const uint16_t* textOffArr = nullptr;
   const int16_t* xposArr = nullptr;
   const uint16_t* focusSuffixXArr = nullptr;  // null when !focusPresent
@@ -80,7 +82,8 @@ class TextBlock final : public Block {
   explicit TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
                      const std::vector<uint16_t>& focusSuffixX, const BlockStyle& blockStyle = BlockStyle(),
-                     std::vector<std::string> rubyTexts = {}, std::vector<LinkSpan> linkSpans = {});
+                     std::vector<std::string> rubyTexts = {}, std::vector<LinkSpan> linkSpans = {},
+                     const std::vector<uint32_t>& wordVisibleOffsets = {});
   ~TextBlock() override = default;
   TextBlock(const TextBlock&) = delete;
   TextBlock& operator=(const TextBlock&) = delete;
@@ -97,6 +100,9 @@ class TextBlock final : public Block {
     return end - textOffArr[i] - 1;  // exclude the NUL
   }
   int16_t wordXpos(const uint16_t i) const { return xposArr[i]; }
+  // Same coordinate space as Page::visibleTextOffset, so a highlight anchored
+  // to it survives re-pagination. 0 for every word when layout supplied none.
+  uint32_t wordVisibleOffset(const uint16_t i) const { return visOffArr[i]; }
   EpdFontFamily::Style wordStyle(const uint16_t i) const { return static_cast<EpdFontFamily::Style>(stylesArr[i]); }
   uint8_t focusBoundary(const uint16_t i) const { return focusPresent ? focusBoundaryArr[i] : 0; }
   uint16_t focusSuffixX(const uint16_t i) const { return focusPresent ? focusSuffixXArr[i] : 0; }

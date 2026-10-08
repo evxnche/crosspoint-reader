@@ -144,6 +144,40 @@ TEST_F(ChapterHtmlSlimParserTest, UnequalTableCellsAndRubySurvivePageBreaks) {
   for (const auto& lines : parser.tableCellLines) EXPECT_TRUE(lines.empty());
 }
 
+TEST_F(ChapterHtmlSlimParserTest, LinesKeepEachWordsVisibleOffsetThroughSerialization) {
+  ParsedText text(false);
+  text.addWord("alpha", EpdFontFamily::REGULAR, false, false, 10);
+  text.addWord("beta", EpdFontFamily::REGULAR, false, false, 16);
+  text.addWord("gamma", EpdFontFamily::REGULAR, false, false, 21);
+  std::vector<std::unique_ptr<TextBlock>> lines;
+  // Narrow enough that the words land on more than one line.
+  text.layoutAndExtractLines(renderer, 0, 60,
+                             [&](std::unique_ptr<TextBlock> line, auto) { lines.push_back(std::move(line)); });
+  ASSERT_GT(lines.size(), 1u);
+
+  std::vector<uint32_t> offsets;
+  for (const auto& line : lines) {
+    for (uint16_t i = 0; i < line->wordCount(); i++) offsets.push_back(line->wordVisibleOffset(i));
+  }
+  EXPECT_EQ(offsets, (std::vector<uint32_t>{10, 16, 21}));
+
+  const auto path = std::filesystem::temp_directory_path() / "crosspoint-word-offsets.bin";
+  {
+    HalFile output;
+    ASSERT_TRUE(output.open(path.c_str(), "wb"));
+    ASSERT_TRUE(lines.back()->serialize(output));
+  }
+  HalFile input;
+  ASSERT_TRUE(input.open(path.c_str(), "rb"));
+  const auto restored = TextBlock::deserialize(input);
+  ASSERT_NE(restored, nullptr);
+  ASSERT_EQ(restored->wordCount(), lines.back()->wordCount());
+  for (uint16_t i = 0; i < restored->wordCount(); i++) {
+    EXPECT_EQ(restored->wordVisibleOffset(i), lines.back()->wordVisibleOffset(i));
+    EXPECT_STREQ(restored->wordText(i), lines.back()->wordText(i));
+  }
+}
+
 TEST_F(ChapterHtmlSlimParserTest, PageImageDeserializeRejectsMissingImageBlock) {
   const auto path = std::filesystem::temp_directory_path() / "crosspoint-missing-image-cache.bin";
   {

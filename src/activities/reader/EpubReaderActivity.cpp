@@ -32,6 +32,7 @@
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
+#include "PageHighlights.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
@@ -40,11 +41,13 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "TextSelectionActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
+#include "util/HighlightFile.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -148,7 +151,19 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
   }
 }
 
+struct HighlightJump {
+  std::string bookPath;
+  uint16_t spineIndex = 0;
+  uint32_t offset = 0;
+};
+std::optional<HighlightJump> pendingHighlightJump;
+
 }  // namespace
+
+void EpubReaderActivity::openAtHighlight(const std::string& bookPath, const uint16_t spineIndex,
+                                         const uint32_t visibleTextOffset) {
+  pendingHighlightJump = HighlightJump{bookPath, spineIndex, visibleTextOffset};
+}
 
 EpubReaderActivity::~EpubReaderActivity() {
   ImageBlock::setExtractor(nullptr, nullptr);
@@ -232,8 +247,20 @@ bool EpubReaderActivity::loadBook() {
     }
   }
 
+  if (pendingHighlightJump) {
+    if (pendingHighlightJump->bookPath == bookPath && pendingHighlightJump->spineIndex < epub->getSpineItemsCount()) {
+      currentSpineIndex = pendingHighlightJump->spineIndex;
+      nextPageNumber = 0;
+      pendingOffsetJump = pendingHighlightJump->offset;
+      cachedChapterTotalPageCount = 0;
+      cachedVisibleTextOffset.reset();
+    }
+    pendingHighlightJump.reset();
+  }
+
   loadLinkStack();
   loadCachedBookmarks();
+  HighlightFile::load(epub->getPath(), highlights);
   return true;
 }
 
@@ -326,6 +353,25 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(page),
                                                                         orientedMarginLeft, orientedMarginTop),
                          [this](const ActivityResult&) { requestUpdate(); });
+}
+
+bool EpubReaderActivity::startTextSelection() {
+  int x = 0;
+  int y = 0;
+  if (!mappedInput.wasScreenHoldStart(x, y)) return false;
+  // The selection screen draws over the page already in the framebuffer.
+  if (!section || pageBufferStale || showBookmarkMessage || showDictionaryMessage) return false;
+  auto page = section->loadPage(section->currentPage);
+  if (!page) return false;
+
+  automaticPageTurnActive = false;
+  const float progress = static_cast<float>(bookPercentFor(chapterPosition())) / 100.0f;
+  startActivityForResult(
+      std::make_unique<TextSelectionActivity>(renderer, mappedInput, std::move(page), currentPageLinkMarginLeft,
+                                              currentPageLinkMarginTop, x, y, epub->getPath(), epub->getTitle(),
+                                              static_cast<uint16_t>(currentSpineIndex), progress, highlights),
+      [this](const ActivityResult&) { requestUpdate(); });
+  return true;
 }
 
 void EpubReaderActivity::loop() {
@@ -466,6 +512,11 @@ void EpubReaderActivity::loop() {
       break;
     default:
       break;
+  }
+
+  // Hold still on a word to look it up; hold and slide to highlight.
+  if (!atEndOfBook && mappedInput.hasTouch() && startTextSelection()) {
+    return;
   }
 
   if (automaticPageTurnActive) {
@@ -1588,6 +1639,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
 
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+  // B/W pass only: the wash is plain black pixels, so the grayscale planes
+  // need nothing for it.
+  PageHighlights::shadePage(renderer, *page, fontId, orientedMarginLeft, orientedMarginTop,
+                            static_cast<uint16_t>(currentSpineIndex), highlights);
   renderStatusBar();
   const auto tBwRender = millis();
 

@@ -17,6 +17,7 @@
 #include "browser/OpdsBookBrowserActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
+#include "home/HighlightsActivity.h"
 #include "home/HomeActivity.h"
 #include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
@@ -246,6 +247,10 @@ void ActivityManager::goToUsbDrive() {
 }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToHighlights() {
+  replaceActivity(std::make_unique<HighlightsActivity>(renderer, mappedInput));
+}
 
 void ActivityManager::goToPlan() { replaceActivity(std::make_unique<PlanActivity>(renderer, mappedInput)); }
 

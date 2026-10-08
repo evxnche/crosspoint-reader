@@ -13,14 +13,23 @@
 // in reading order, Up/Down jump rows, Confirm looks the word up and opens
 // DictionaryDefinitionActivity, Back returns to the reader. On touch devices a
 // touch-down moves the highlight and a tap on a word looks it up directly.
+//
+// Direct mode (a directX/directY point is given): looks up the word at that
+// point straight away over the page already on screen, and finishes once the
+// definition or the not-found message is dismissed. Used by the reader's
+// long-press.
 class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                        std::unique_ptr<Page> page, int marginLeft, int marginTop)
+                                        std::unique_ptr<Page> page, int marginLeft, int marginTop, int directX = -1,
+                                        int directY = -1)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         page(std::move(page)),
         marginLeft(marginLeft),
-        marginTop(marginTop) {}
+        marginTop(marginTop),
+        directX(directX),
+        directY(directY),
+        directLookup(directX >= 0 && directY >= 0) {}
 
   void onEnter() override;
   void loop() override;
@@ -51,6 +60,10 @@ class DictionaryWordSelectActivity final : public Activity {
   std::unique_ptr<Page> page;
   const int marginLeft;
   const int marginTop;
+  const int directX;
+  const int directY;
+  const bool directLookup;
+  bool directLookupPending = false;
   int fontId = 0;
   int lineHeight = 0;
 

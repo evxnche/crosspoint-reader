@@ -13,6 +13,7 @@
 #include "BookmarkEntry.h"
 #include "ChapterPosition.h"
 #include "EpubReaderMenuActivity.h"
+#include "HighlightEntry.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
@@ -50,6 +51,7 @@ class EpubReaderActivity final : public ReaderActivity {
   unsigned long lastRenderCompleteMs = 0;
   bool bookmarkRemoved = false;
   std::vector<BookmarkEntry> cachedBookmarks;
+  std::vector<HighlightEntry> highlights;
   bool recentsEntryRemoved = false;
   unsigned long bookmarkMessageTime = 0UL;
   bool pendingReadFolderMove = false;
@@ -162,6 +164,9 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string moreRowValue(int row) const;
   void activateMoreRow(int row);
   void openDictionaryWordSelect();
+  // Long-press on the page: starts TextSelectionActivity. False when no
+  // long-press began this frame.
+  bool startTextSelection();
   bool launchKOReaderSync();
   unsigned long confirmLongPressThreshold() const;
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
@@ -195,6 +200,10 @@ class EpubReaderActivity final : public ReaderActivity {
                               bool allowFastInitialRefresh)
       : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   ~EpubReaderActivity() override;
+
+  // The next reader opened on bookPath starts at this highlight instead of the
+  // saved reading position (Home > Highlights).
+  static void openAtHighlight(const std::string& bookPath, uint16_t spineIndex, uint32_t visibleTextOffset);
 
   void loop() override;
 

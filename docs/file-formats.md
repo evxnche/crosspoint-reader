@@ -90,6 +90,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 48
+
+Each text block's arena now begins with a `u32` per word: that word's
+visible-codepoint offset within its spine (the coordinate space of the page
+visible-offset LUT). The rest of the arena follows unchanged. Highlights anchor
+to these offsets.
+
 ### Version 47
 
 Version 47 keeps the serialized layout unchanged and invalidates sections built
@@ -253,6 +260,7 @@ struct TextBlock {
     u16 textBytes [[comment("Total size of text[], including one NUL per word")]];
 
     if (wordCount > 0) {
+        u32 visibleOffset[wordCount] [[comment("Visible-codepoint offset of word i within its spine (v48)")]];
         u16 textOff[wordCount] [[comment("Byte offset of word i's text within text[]")]];
         s16 wordXPos[wordCount];
         if (hasFocus != 0) {

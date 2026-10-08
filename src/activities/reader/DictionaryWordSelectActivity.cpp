@@ -50,6 +50,17 @@ void DictionaryWordSelectActivity::onEnter() {
   // full-repaint path as the fallback.
   snapshot = makeUniqueNoThrow<uint8_t[]>(SNAPSHOT_CAPACITY);
   extractWords();
+  if (directLookup) {
+    selected = wordAt(directX, directY);
+    if (selected < 0) {
+      finish();
+      return;
+    }
+    // Looked up on the first loop pass: performLookup() waits on a render,
+    // which onEnter must not do.
+    directLookupPending = true;
+    return;
+  }
   // Start on the middle row's word nearest mid-screen instead of top-left:
   // any word on the page is then at most half a page of moves away.
   if (!words.empty()) {
@@ -182,7 +193,13 @@ void DictionaryWordSelectActivity::performLookup() {
     startActivityForResult(
         std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
                                                        std::move(definition), dict.definitionsAreHtml()),
-        [this](const ActivityResult&) { requestUpdate(); });
+        [this](const ActivityResult&) {
+          if (directLookup) {
+            finish();
+          } else {
+            requestUpdate();
+          }
+        });
     return;
   }
   // Name the failure: a genuine miss is "Not found"; a word that WAS found but
@@ -230,10 +247,20 @@ void DictionaryWordSelectActivity::performLookup() {
 }
 
 void DictionaryWordSelectActivity::loop() {
+  if (directLookupPending) {
+    directLookupPending = false;
+    performLookup();
+    return;
+  }
+
   if (popup == Popup::NotFound || popup == Popup::Error) {
     if (millis() - popupTime >= POPUP_DURATION_MS) {
       popup = Popup::None;
-      requestUpdate();
+      if (directLookup) {
+        finish();
+      } else {
+        requestUpdate();
+      }
     }
     return;
   }
@@ -348,6 +375,17 @@ void DictionaryWordSelectActivity::drawHints() const {
 }
 
 void DictionaryWordSelectActivity::render(RenderLock&&) {
+  if (directLookup) {
+    // The reader page is already on screen; only the status popup goes over it.
+    if (popup != Popup::None) {
+      // drawPopup overlays the framebuffer and refreshes the display itself.
+      GUI.drawPopup(renderer, I18N.get(popupMsg));
+    } else {
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
+    return;
+  }
+
   // Differential fast path: only the highlight moved and the framebuffer
   // still holds a clean page (no popup or sub-activity since the last full
   // repaint). Restore the pixels under the old highlight, draw the new one,

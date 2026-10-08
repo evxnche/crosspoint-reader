@@ -24,7 +24,7 @@
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 5;  // File Browser, Library, File transfer, Plan, Settings
+  int count = 6;  // File Browser, Library, Highlights, File transfer, Plan, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -194,6 +194,9 @@ void HomeActivity::loop() {
       case HomeMenuItem::LIBRARY:
         onLibraryOpen();
         break;
+      case HomeMenuItem::HIGHLIGHTS:
+        onHighlightsOpen();
+        break;
       case HomeMenuItem::OPDS_BROWSER:
         onOpdsBrowserOpen();
         break;
@@ -320,17 +323,17 @@ void HomeActivity::render(RenderLock&&) {
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER), tr(STR_PLAN),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Blocks, Settings};
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES),  tr(STR_LIBRARY), tr(STR_HIGHLIGHTS),
+                                        tr(STR_FILE_TRANSFER), tr(STR_PLAN),    tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Library, Bookmark, Transfer, Blocks, Settings};
 
   if (hasOpdsServers) {
-    menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
-    menuIcons.insert(menuIcons.begin() + 2, Blocks);
+    menuItems.insert(menuItems.begin() + 3, tr(STR_OPDS_BROWSER));
+    menuIcons.insert(menuIcons.begin() + 3, Blocks);
   }
 
   if (hasArticleInbox) {
-    const int at = hasOpdsServers ? 3 : 2;
+    const int at = hasOpdsServers ? 4 : 3;
     menuItems.insert(menuItems.begin() + at, tr(STR_ARTICLES));
     menuIcons.insert(menuIcons.begin() + at, Book);
   }
@@ -371,6 +374,8 @@ void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToR
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 
 void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
+
+void HomeActivity::onHighlightsOpen() { activityManager.goToHighlights(); }
 
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 

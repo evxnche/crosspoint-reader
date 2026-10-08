@@ -30,7 +30,7 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .headerTitleAlign = 0,  // left
                                  .headerBatterySide = 0,
                                  .headerBatteryDetached = true,
-                                 .menuRowHeight = 64,
+                                 .menuRowHeight = 56,  // seven Home rows (with Highlights) fit above the bottom edge
                                  .menuSpacing = 8,
                                  .tabSpacing = 8,
                                  .tabBarHeight = 48,
