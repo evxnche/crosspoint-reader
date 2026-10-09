@@ -11,6 +11,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "activities/browser/ArticleSyncActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
@@ -49,7 +50,10 @@ FileBrowserActivity::FileBrowserActivity(GfxRenderer& renderer, MappedInputManag
                                          std::string initialPath, const Mode mode)
     : UiListActivity("FileBrowser", renderer, mappedInput, /*wantsTouchLongPress=*/true),
       mode(mode),
-      basepath(initialPath.empty() ? "/" : std::move(initialPath)) {}
+      basepath(initialPath.empty() ? "/" : std::move(initialPath)) {
+  const std::string articles = ArticleSyncActivity::FOLDER;
+  if (mode == Mode::Books && (basepath == articles || basepath.rfind(articles + "/", 0) == 0)) rootPath = articles;
+}
 
 void FileBrowserActivity::loadFiles() {
   files.clear();
@@ -104,6 +108,7 @@ void FileBrowserActivity::loadFiles() {
   }
   root.close();
   FsHelpers::sortFileList(files);
+  ArticleSyncActivity::sortNewestFirst(basepath, files);
 }
 
 // fui::ListProps::rowProvider — formats row `index` from files[index] into the
@@ -379,12 +384,12 @@ bool FileBrowserActivity::handleCustomInput() {
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
   if (mode == Mode::Books && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
-      mappedInput.getHeldTime() >= GO_HOME_MS && basepath != "/") {
+      mappedInput.getHeldTime() >= GO_HOME_MS && basepath != rootPath) {
     {
       // buildScreen() runs on the render task and reads basepath plus `files`
       // through the row provider; mutate only under the render lock.
       RenderLock lock(*this);
-      basepath = "/";
+      basepath = rootPath;
       loadFiles();
       nav.selected = 0;
       nav.top = 0;
@@ -405,7 +410,7 @@ bool FileBrowserActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     // Short press: go up one directory, or go home if at root
     if (mappedInput.getHeldTime() < GO_HOME_MS) {
-      if (basepath != "/") {
+      if (basepath != "/" && basepath != rootPath) {
         const std::string oldPath = basepath;
 
         {
@@ -528,7 +533,8 @@ void FileBrowserActivity::drawChrome() {
 }
 
 void FileBrowserActivity::drawFooter() {
-  const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
+  const bool atRoot = basepath == "/" || basepath == rootPath;
+  const char* backLabel = atRoot ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
   // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
   const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && nav.selected >= 0 &&

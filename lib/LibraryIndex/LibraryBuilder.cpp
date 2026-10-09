@@ -196,6 +196,10 @@ bool isBookName(const std::string& name) {
 // card written on a Mac shows every book twice.
 bool isHiddenOrSidecar(const char* name) { return name[0] == '.'; }
 
+// Saved web and X articles have their own lists (ArticleSyncActivity); the
+// shelf is for books.
+bool isArticlesFolder(const char* name, const int depth) { return depth == 0 && strcasecmp(name, "Articles") == 0; }
+
 std::string stemOf(const std::string& name) {
   const size_t dot = name.find_last_of('.');
   return (dot == std::string::npos || dot == 0) ? name : name.substr(0, dot);
@@ -474,6 +478,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
     const std::string name(st.nameBuf);
 
     if (isDir) {
+      if (isArticlesFolder(st.nameBuf, depth)) continue;
       const size_t resumePosition = dir.position();
       dir.close();
       walk(st, joinLibraryPath(path, name), depth + 1);

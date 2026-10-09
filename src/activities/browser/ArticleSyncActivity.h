@@ -7,7 +7,8 @@
 #include "activities/Activity.h"
 
 // Downloads every article saved to the Reader Inbox that this device has not
-// fetched before, into /Articles.
+// fetched before, then opens the article lists: X posts in /Articles/X, web
+// pages in /Articles/Web, each shown newest first.
 //
 // The inbox is configured as an ordinary OPDS server (its URL ends in
 // /api/opds), so the same entry also browses it in the catalog browser; this
@@ -19,8 +20,14 @@ class ArticleSyncActivity final : public Activity {
   ArticleSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, OpdsServer server)
       : Activity("ArticleSync", renderer, mappedInput), server(std::move(server)) {}
 
+  static constexpr const char* FOLDER = "/Articles";
+
   // The configured inbox, if any: the first OPDS server whose URL ends in /api/opds.
   static bool findInboxServer(OpdsServer& out);
+
+  // In an article list folder, reorders `files` newest download first; names
+  // this device never downloaded keep their order after them. Elsewhere a no-op.
+  static void sortNewestFirst(const std::string& folder, std::vector<std::string>& files);
 
   void onEnter() override;
   void onExit() override;
@@ -29,12 +36,13 @@ class ArticleSyncActivity final : public Activity {
   bool preventAutoSleep() override { return state == State::Connecting || state == State::Working; }
 
  private:
-  enum class State { Connecting, Working, Done, Error };
+  enum class State { Connecting, Working, Done };
 
   struct Pending {
     std::string id;
     std::string title;
     std::string href;
+    const char* folder;
   };
 
   void onWifiReady(bool connected);
@@ -44,12 +52,12 @@ class ArticleSyncActivity final : public Activity {
   std::string destinationFor(const Pending& article) const;
   void loadSynced();
   void saveSynced() const;
-  void fail(const char* message);
+  void openArticles();
 
   OpdsServer server;
   State state = State::Connecting;
+  bool opened = false;
   std::string statusLine;
-  std::string errorText;
 
   // Progress of the current run.
   int total = 0;
@@ -57,8 +65,6 @@ class ArticleSyncActivity final : public Activity {
   std::string currentTitle;
   size_t bytesDone = 0;
   size_t bytesTotal = 0;
-  std::vector<std::string> fetchedTitles;
-  int failures = 0;
 
   std::vector<std::string> synced;  // ids already downloaded, oldest first
   bool cancel = false;

@@ -19,6 +19,8 @@ class FileBrowserActivity final : public UiListActivity {
 
   // Files state
   std::string basepath = "/";
+  // Back from here goes home: "/", or the Articles folder when opened in it.
+  std::string rootPath = "/";
   std::vector<std::string> files;
   std::unique_ptr<char[]> fileNameBuffer;
 

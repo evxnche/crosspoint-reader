@@ -7,13 +7,14 @@
 #include <HalMemory.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <LibraryBuilder.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WiFi.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <numeric>
 
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
@@ -27,8 +28,13 @@
 
 namespace {
 constexpr const char* TAG = "ARTSYNC";
-constexpr const char* ARTICLES_DIR = "/Articles";
+constexpr const char* WEB_DIR = "/Articles/Web";
+constexpr const char* X_DIR = "/Articles/X";
 constexpr const char* SYNCED_PATH = "/.crosspoint/articles_synced.txt";
+// Every downloaded article's path, one per line, oldest first.
+constexpr const char* ORDER_PATH = "/.crosspoint/articles_order.txt";
+constexpr size_t ORDER_CHUNK = 512;
+constexpr size_t ORDER_LINE_MAX = 256;
 constexpr const char* OPDS_SUFFIX = "/api/opds";
 // Remembered ids beyond this are dropped oldest-first; the server keeps 300.
 constexpr size_t MAX_SYNCED = 600;
@@ -61,6 +67,63 @@ bool ArticleSyncActivity::findInboxServer(OpdsServer& out) {
     }
   }
   return false;
+}
+
+void ArticleSyncActivity::sortNewestFirst(const std::string& folder, std::vector<std::string>& files) {
+  std::string prefix = folder;
+  while (prefix.size() > 1 && prefix.back() == '/') prefix.pop_back();
+  if (prefix != WEB_DIR && prefix != X_DIR) return;
+  prefix += '/';
+
+  HalFile f;
+  if (files.size() < 2 || !Storage.openFileForRead(TAG, ORDER_PATH, f)) return;
+  auto buf = makeUniqueNoThrow<char[]>(ORDER_CHUNK + ORDER_LINE_MAX);
+  if (!buf) {
+    LOG_ERR(TAG, "OOM: order buffer");
+    return;
+  }
+  char* chunk = buf.get();
+  char* line = chunk + ORDER_CHUNK;
+
+  // rank[i] = manifest line of files[i]; a later line is a newer download.
+  std::vector<int> rank(files.size(), -1);
+  int lineNo = 0;
+  size_t len = 0;
+  bool overlong = false;
+  const auto takeLine = [&] {
+    if (!overlong && len > prefix.size() && memcmp(line, prefix.data(), prefix.size()) == 0) {
+      const std::string_view name(line + prefix.size(), len - prefix.size());
+      for (size_t i = 0; i < files.size(); ++i) {
+        if (files[i] == name) {
+          rank[i] = lineNo;
+          break;
+        }
+      }
+    }
+    ++lineNo;
+    len = 0;
+    overlong = false;
+  };
+  for (int n = f.read(chunk, ORDER_CHUNK); n > 0; n = f.read(chunk, ORDER_CHUNK)) {
+    for (int i = 0; i < n; ++i) {
+      if (chunk[i] == '\n') {
+        takeLine();
+      } else if (len < ORDER_LINE_MAX) {
+        line[len++] = chunk[i];
+      } else {
+        overlong = true;
+      }
+    }
+  }
+  if (len > 0) takeLine();
+
+  std::vector<size_t> order(files.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&rank](const size_t a, const size_t b) { return rank[a] > rank[b]; });
+  std::vector<std::string> sorted;
+  sorted.reserve(files.size());
+  for (const size_t i : order) sorted.push_back(std::move(files[i]));
+  files = std::move(sorted);
 }
 
 void ArticleSyncActivity::onEnter() {
@@ -97,17 +160,17 @@ void ArticleSyncActivity::onExit() {
 
 void ArticleSyncActivity::onWifiReady(const bool connected) {
   if (!connected) {
-    fail(tr(STR_WIFI_CONN_FAILED));
+    LOG_ERR(TAG, "No Wi-Fi; opening the lists already on the card");
+    openArticles();
     return;
   }
   sync();
 }
 
-void ArticleSyncActivity::fail(const char* message) {
+// loop() makes the switch: this can run inside onEnter() or a result handler.
+void ArticleSyncActivity::openArticles() {
   RenderLock lock(*this);
-  state = State::Error;
-  errorText = message;
-  requestUpdate();
+  state = State::Done;
 }
 
 void ArticleSyncActivity::loadSynced() {
@@ -155,6 +218,7 @@ bool ArticleSyncActivity::fetchPending(std::vector<Pending>& out) {
   filter["articles"][0]["id"] = true;
   filter["articles"][0]["title"] = true;
   filter["articles"][0]["epub"] = true;
+  filter["articles"][0]["site"] = true;
   JsonDocument doc;
   const DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
   body.clear();
@@ -172,6 +236,7 @@ bool ArticleSyncActivity::fetchPending(std::vector<Pending>& out) {
     p.id = a["id"] | "";
     p.title = a["title"] | "";
     p.href = a["epub"] | "";
+    p.folder = strcmp(a["site"] | "", "X") == 0 ? X_DIR : WEB_DIR;
     if (p.id.empty() || p.href.empty()) continue;
     if (std::find(synced.begin(), synced.end(), p.id) != synced.end()) continue;
     out.push_back(std::move(p));
@@ -188,10 +253,10 @@ bool ArticleSyncActivity::pollCancel() {
 std::string ArticleSyncActivity::destinationFor(const Pending& article) const {
   std::string name = StringUtils::sanitizeFilename(article.title.empty() ? article.id : article.title, MAX_TITLE_BYTES);
   if (name.empty()) name = article.id;
-  std::string path = std::string(ARTICLES_DIR) + "/" + name + ".epub";
+  std::string path = std::string(article.folder) + "/" + name + ".epub";
   // Two different articles with the same title keep both files.
   if (Storage.exists(path.c_str()))
-    path = std::string(ARTICLES_DIR) + "/" + name + " " + article.id.substr(0, 6) + ".epub";
+    path = std::string(article.folder) + "/" + name + " " + article.id.substr(0, 6) + ".epub";
   return path;
 }
 
@@ -200,11 +265,13 @@ void ArticleSyncActivity::sync() {
     RenderLock lock(*this);
     state = State::Working;
     statusLine = tr(STR_ARTICLES_CHECKING);
-    total = current = failures = 0;
-    fetchedTitles.clear();
+    total = current = 0;
   }
   requestUpdate(true);
 
+  for (const char* dir : {FOLDER, WEB_DIR, X_DIR}) {
+    if (!Storage.exists(dir)) Storage.mkdir(dir);
+  }
   loadSynced();
   std::vector<Pending> pending;
   if (!fetchPending(pending)) {
@@ -212,11 +279,9 @@ void ArticleSyncActivity::sync() {
       finish();
       return;
     }
-    fail(tr(STR_ARTICLES_LIST_FAILED));
+    openArticles();
     return;
   }
-
-  if (!Storage.exists(ARTICLES_DIR)) Storage.mkdir(ARTICLES_DIR);
   // Rebuildable SD-font caches give TLS the room a multi-MB transfer needs.
   {
     RenderLock lock(*this);
@@ -226,7 +291,6 @@ void ArticleSyncActivity::sync() {
   {
     RenderLock lock(*this);
     total = static_cast<int>(pending.size());
-    fetchedTitles.reserve(pending.size());
   }
 
   for (size_t i = 0; i < pending.size() && !cancel; ++i) {
@@ -234,10 +298,6 @@ void ArticleSyncActivity::sync() {
     if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
         ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
       LOG_ERR(TAG, "Low heap (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-      {
-        RenderLock lock(*this);
-        ++failures;
-      }
       break;
     }
     {
@@ -277,20 +337,19 @@ void ArticleSyncActivity::sync() {
 
     if (result == HttpDownloader::OK) {
       clearBookCache(dest);
-      library::markLibraryIndexDirty();
       synced.push_back(article.id);
       // Saved per article, so a run cut short (power off, a crash) does not
       // download everything again next time under " <id>" names.
       saveSynced();
-      {
-        RenderLock lock(*this);
-        fetchedTitles.push_back(article.title);
+      if (HalFile order = Storage.open(ORDER_PATH, O_WRONLY | O_CREAT | O_APPEND)) {
+        order.write(dest.data(), dest.size());
+        order.write("\n", 1);
+      } else {
+        LOG_ERR(TAG, "Cannot record article order");
       }
       LOG_INF(TAG, "Saved %s", dest.c_str());
     } else if (result != HttpDownloader::ABORTED) {
       LOG_ERR(TAG, "Download failed (%d): %s", static_cast<int>(result), article.id.c_str());
-      RenderLock lock(*this);
-      ++failures;
     }
   }
 
@@ -298,21 +357,13 @@ void ArticleSyncActivity::sync() {
     finish();
     return;
   }
-  RenderLock lock(*this);
-  state = State::Done;
-  requestUpdate(true);
+  openArticles();
 }
 
 void ArticleSyncActivity::loop() {
-  if (state == State::Connecting || state == State::Working) return;
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (state == State::Done)
-      activityManager.goToFileBrowser(ARTICLES_DIR);
-    else
-      finish();
-  }
+  if (state != State::Done || opened) return;
+  opened = true;
+  activityManager.goToFileBrowser(FOLDER);
 }
 
 void ArticleSyncActivity::render(RenderLock&&) {
@@ -346,35 +397,11 @@ void ArticleSyncActivity::render(RenderLock&&) {
       GUI.drawProgressBar(renderer, Rect{x, y, width, 12}, bytesDone, bytesTotal > 0 ? bytesTotal : 1);
       break;
 
-    case State::Done: {
-      if (fetchedTitles.empty()) {
-        renderer.drawText(UI_10_FONT_ID, x, y, tr(STR_ARTICLES_NONE_NEW));
-      } else {
-        snprintf(buf, sizeof(buf), tr(STR_ARTICLES_SAVED), static_cast<int>(fetchedTitles.size()));
-        renderer.drawText(UI_10_FONT_ID, x, y, buf, true, EpdFontFamily::BOLD);
-        const int bottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - lineHeight;
-        for (const auto& title : fetchedTitles) {
-          y += lineHeight;
-          if (y > bottom) break;
-          renderer.drawText(UI_10_FONT_ID, x, y, renderer.truncatedText(UI_10_FONT_ID, title.c_str(), width).c_str());
-        }
-      }
-      if (failures > 0) {
-        y += lineHeight * 2;
-        snprintf(buf, sizeof(buf), tr(STR_ARTICLES_FAILED_COUNT), failures);
-        renderer.drawText(UI_10_FONT_ID, x, y, buf);
-      }
-      break;
-    }
-
-    case State::Error:
-      renderer.drawText(UI_10_FONT_ID, x, y, errorText.c_str());
+    case State::Done:
       break;
   }
 
-  const bool busy = state == State::Connecting || state == State::Working;
-  const auto labels = mappedInput.mapLabels(
-      tr(STR_BACK), busy ? "" : (state == State::Done ? tr(STR_ARTICLES_OPEN) : tr(STR_DONE)), "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }
